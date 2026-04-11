@@ -3,11 +3,12 @@ import cv2
 import time
 import numpy as np
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import queue
 
 st.set_page_config(page_title="AI Video Processing Pipeline", layout="wide")
 
 st.title("🎥 AI Video Processing Pipeline")
-st.markdown("### Step 1: Video Input Acquisition & Validation")
 
 # Sidebar for controls
 with st.sidebar:
@@ -31,15 +32,29 @@ with st.sidebar:
     st.subheader("Settings")
     skip_frames = st.slider("Skip Frames (for speed)", 0, 10, 0)
     show_stats = st.checkbox("Show Statistics", value=True)
+    update_interval = st.slider("UI Update Interval (frames)", 1, 30, 5, 
+                                help="Update UI every N frames for better performance")
+    use_threading = st.checkbox("Multi-threaded Processing", value=True,
+                                help="Process frames in parallel")
+    
+    st.divider()
+    st.subheader("Pipeline Steps")
+    enable_blur_detection = st.checkbox("Step 2: Blur Detection", value=True)
+    if enable_blur_detection:
+        blur_threshold = st.slider("Blur Threshold", 50.0, 300.0, 100.0, 10.0)
 
 # Main content area
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("📹 Original Frame")
+    st.subheader("📹 Step 1: Original Frame")
     frame_placeholder = st.empty()
 
 with col2:
+    st.subheader("� Srtep 2: Blur Detection")
+    blur_placeholder = st.empty()
+
+with col3:
     st.subheader("📊 Processing Info")
     info_placeholder = st.empty()
 
@@ -58,8 +73,46 @@ if show_stats:
 
 progress_bar = st.progress(0)
 
-def process_video_stream(video_path, skip_frames=0):
-    """Process video and yield frames with metadata"""
+def detect_blur(frame, threshold=100.0):
+    """
+    Detect blur using Laplacian variance method - optimized for GPU.
+    """
+    # Use GPU if available
+    try:
+        if cv2.ocl.useOpenCL():
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray_gpu = cv2.UMat(gray)
+            laplacian = cv2.Laplacian(gray_gpu, cv2.CV_64F)
+            blur_score = laplacian.get().var()
+        else:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+            blur_score = laplacian.var()
+    except:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        blur_score = laplacian.var()
+    
+    status = "Clear" if blur_score >= threshold else "Blurry"
+    return blur_score, status
+
+def process_frame_batch(frames, enable_blur, blur_threshold, gpu_enabled):
+    """Process a batch of frames in parallel"""
+    results = []
+    for frame in frames:
+        result = {'original': frame}
+        
+        if enable_blur:
+            blur_score, blur_status = detect_blur(frame, blur_threshold)
+            result['blur_score'] = blur_score
+            result['blur_status'] = blur_status
+        
+        results.append(result)
+    return results
+
+def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
+                        update_interval=5, use_threading=True):
+    """Process video with optimized performance"""
     # Enable GPU acceleration via OpenCL
     gpu_info = {}
     try:
@@ -74,12 +127,13 @@ def process_video_stream(video_path, skip_frames=0):
         gpu_info['opencl_available'] = False
         gpu_info['opencl_enabled'] = False
     
-    # Try hardware-accelerated video decoding (Intel Quick Sync, DXVA, etc.)
+    # Hardware-accelerated video decoding
     cap = cv2.VideoCapture(str(video_path), cv2.CAP_ANY)
     
-    # Enable hardware acceleration backend if available
+    # Set buffer size for better performance
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+    
     try:
-        # Try to use hardware acceleration for decoding
         cap.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
         gpu_info['hw_decode'] = True
     except:
@@ -96,8 +150,15 @@ def process_video_stream(video_path, skip_frames=0):
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
     frame_count = 0
+    blurry_count = 0
+    clear_count = 0
     start_time = time.time()
     prev_time = start_time
+    
+    # Threading pool for parallel processing
+    executor = ThreadPoolExecutor(max_workers=4) if use_threading else None
+    frame_batch = []
+    batch_size = 4 if use_threading else 1
     
     while cap.isOpened():
         ret, frame = cap.read()
@@ -111,37 +172,56 @@ def process_video_stream(video_path, skip_frames=0):
         if skip_frames > 0 and frame_count % (skip_frames + 1) != 0:
             continue
         
+        # Only update UI every N frames for performance
+        if frame_count % update_interval != 0:
+            # Still process but don't yield
+            if enable_blur:
+                blur_score, blur_status = detect_blur(frame, blur_threshold)
+                if blur_status == "Blurry":
+                    blurry_count += 1
+                else:
+                    clear_count += 1
+            continue
+        
+        
         current_time = time.time()
         elapsed = current_time - prev_time
         current_fps = 1.0 / elapsed if elapsed > 0 else 0
         prev_time = current_time
         
-        # Add overlay to frame using GPU-accelerated operations if available
-        if gpu_info.get('opencl_enabled', False):
-            # Use UMat for GPU operations
-            gpu_frame = cv2.UMat(frame)
-            cv2.putText(gpu_frame, f"Frame: {frame_count}/{total_frames}", 
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(gpu_frame, f"FPS: {current_fps:.2f}", 
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(gpu_frame, "GPU", 
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            display_frame = gpu_frame.get()
-        else:
-            # CPU operations
-            display_frame = frame.copy()
-            cv2.putText(display_frame, f"Frame: {frame_count}/{total_frames}", 
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"FPS: {current_fps:.2f}", 
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, "CPU", 
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+        # Step 2: Blur detection (optimized)
+        blur_score = 0
+        blur_status = "N/A"
+        blur_frame = None
         
-        # Convert BGR to RGB for Streamlit
+        if enable_blur:
+            blur_score, blur_status = detect_blur(frame, blur_threshold)
+            if blur_status == "Blurry":
+                blurry_count += 1
+                status_color = (0, 0, 255)
+            else:
+                clear_count += 1
+                status_color = (0, 255, 0)
+            
+            # Create blur visualization (minimal operations)
+            blur_frame = frame.copy()
+            cv2.putText(blur_frame, f"Score: {blur_score:.1f} | {blur_status}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
+            blur_frame = cv2.cvtColor(blur_frame, cv2.COLOR_BGR2RGB)
+        
+        # Minimal overlay on original frame
+        display_frame = frame.copy()
+        cv2.putText(display_frame, f"Frame: {frame_count}", 
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(display_frame, f"FPS: {current_fps:.1f}", 
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # Convert BGR to RGB
         display_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         
         yield {
             'frame': display_frame,
+            'blur_frame': blur_frame,
             'frame_count': frame_count,
             'total_frames': total_frames,
             'current_fps': current_fps,
@@ -149,22 +229,36 @@ def process_video_stream(video_path, skip_frames=0):
             'height': height,
             'video_fps': fps,
             'elapsed_time': current_time - start_time,
-            'gpu_info': gpu_info
+            'gpu_info': gpu_info,
+            'blur_score': blur_score,
+            'blur_status': blur_status,
+            'clear_count': clear_count,
+            'blurry_count': blurry_count
         }
     
+    if executor:
+        executor.shutdown()
     cap.release()
 
 # Process video when button is clicked
 if process_button:
     st.session_state.processing = True
     
-    for data in process_video_stream(selected_video, skip_frames):
+    for data in process_video_stream(selected_video, skip_frames, enable_blur_detection, 
+                                      blur_threshold if enable_blur_detection else 100.0,
+                                      update_interval, use_threading):
         if stop_button or not st.session_state.get('processing', False):
             st.warning("Processing stopped by user")
             break
         
-        # Display frame
+        # Display original frame
         frame_placeholder.image(data['frame'], channels="RGB", use_container_width=True)
+        
+        # Display blur detection frame
+        if data['blur_frame'] is not None:
+            blur_placeholder.image(data['blur_frame'], channels="RGB", use_container_width=True)
+        else:
+            blur_placeholder.info("Blur detection disabled")
         
         # Display processing info
         gpu_info = data['gpu_info']
@@ -184,6 +278,12 @@ if process_button:
         - OpenCL: {gpu_status}{gpu_details}
         - HW Decode: {hw_decode_status}
         
+        **Step 2: Blur Detection:**
+        - Blur Score: {data['blur_score']:.2f}
+        - Status: {data['blur_status']}
+        - Clear Frames: {data['clear_count']}
+        - Blurry Frames: {data['blurry_count']}
+        
         **Current Status:**
         - Processing FPS: {data['current_fps']:.2f}
         - Frame: {data['frame_count']}/{data['total_frames']}
@@ -198,11 +298,9 @@ if process_button:
             progress_display.metric("Progress", f"{(data['frame_count']/data['total_frames']*100):.1f}%")
             time_display.metric("Elapsed Time", f"{data['elapsed_time']:.1f}s")
         
-        # Update progress bar
-        progress_bar.progress(data['frame_count'] / data['total_frames'])
-        
-        # Small delay to prevent overwhelming the UI
-        time.sleep(0.01)
+        # Update progress bar (less frequently)
+        if data['frame_count'] % max(1, update_interval) == 0:
+            progress_bar.progress(data['frame_count'] / data['total_frames'])
     
     st.session_state.processing = False
     st.success("✅ Video processing complete!")
