@@ -1,13 +1,14 @@
-import streamlit as st
+﻿import streamlit as st
 import cv2
 import time
 import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import queue
 
 st.set_page_config(page_title="AI Video Processing Pipeline", layout="wide")
 
-# Custom CSS for card layout with better spacing
+# Custom CSS for card layout
 st.markdown("""
 <style>
     .stApp {
@@ -15,25 +16,15 @@ st.markdown("""
     }
     div[data-testid="column"] {
         background-color: #1e2130;
-        padding: 1.5rem;
-        border-radius: 12px;
+        padding: 1rem;
+        border-radius: 10px;
         border: 1px solid #2e3140;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     }
     .main-title {
         font-size: 2.5rem;
         font-weight: bold;
         margin-bottom: 2rem;
         text-align: center;
-        color: #ffffff;
-    }
-    .stImage {
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    h3 {
-        margin-top: 0 !important;
-        padding-top: 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -42,7 +33,7 @@ st.markdown('<h1 class="main-title">🎥 AI Video Processing Pipeline</h1>', uns
 
 # Sidebar for controls
 with st.sidebar:
-    st.header("⚙️ Controls")
+    st.header("Controls")
     video_files = list(Path("video").glob("*.mp4"))
     
     if video_files:
@@ -55,19 +46,20 @@ with st.sidebar:
         st.error("No video files found in 'video' folder")
         st.stop()
     
-    process_button = st.button("▶️ Process Video", type="primary", use_container_width=True)
-    stop_button = st.button("⏹️ Stop", use_container_width=True)
+    process_button = st.button("â–¶ï¸ Process Video", type="primary")
+    stop_button = st.button("â¹ï¸ Stop")
     
     st.divider()
-    st.subheader("⚡ Performance")
-    skip_frames = st.slider("Skip Frames", 0, 10, 0)
-    update_interval = st.slider("UI Update Interval", 1, 30, 5, 
-                                help="Update UI every N frames for better performance")
-    use_threading = st.checkbox("Multi-threaded Processing", value=True)
+    st.subheader("Settings")
+    skip_frames = st.slider("Skip Frames (for speed)", 0, 10, 0)
     show_stats = st.checkbox("Show Statistics", value=True)
+    update_interval = st.slider("UI Update Interval (frames)", 1, 30, 5, 
+                                help="Update UI every N frames for better performance")
+    use_threading = st.checkbox("Multi-threaded Processing", value=True,
+                                help="Process frames in parallel")
     
     st.divider()
-    st.subheader("🔧 Pipeline Steps")
+    st.subheader("Pipeline Steps")
     enable_blur_detection = st.checkbox("Step 2: Blur Detection", value=True)
     if enable_blur_detection:
         blur_threshold = st.slider("Blur Threshold", 50.0, 300.0, 100.0, 10.0)
@@ -77,99 +69,29 @@ with st.sidebar:
     if enable_enhancement:
         enhancement_strength = st.slider("Enhancement Strength", 1.0, 2.0, 1.1, 0.1)
 
-# Main content area with proper gaps
-col1, col2, col3, col4 = st.columns([3, 3, 3, 2], gap="large")
+# Main content area
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.markdown("### 📹 Step 1: Original")
+    st.subheader('📹 Step 1: Original')
     frame_placeholder = st.empty()
 
 with col2:
-    st.markdown("### 🔍 Step 2: Blur Detection")
+    st.subheader('🔍 Step 2: Blur')
     blur_placeholder = st.empty()
 
 with col3:
-    st.markdown("### ✨ Step 3: Enhanced")
+    st.subheader('✨ Step 3: Enhanced')
     enhance_placeholder = st.empty()
 
 with col4:
-    st.markdown("### 📊 Info")
+    st.subheader('📊 Info')
     info_placeholder = st.empty()
-    
-    # Add custom CSS for info card styling
-    st.markdown("""
-    <style>
-        .info-card {
-            background: linear-gradient(135deg, #1e2130 0%, #2a2d3e 100%);
-            padding: 1.5rem;
-            border-radius: 12px;
-            border: 1px solid #3a3d50;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            margin-bottom: 1rem;
-        }
-        .info-section {
-            margin-bottom: 1.5rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid #3a3d50;
-        }
-        .info-section:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-        .info-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            color: #ffffff;
-            margin-bottom: 0.8rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .info-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.4rem 0;
-            font-size: 0.9rem;
-        }
-        .info-label {
-            color: #a0a0a0;
-            font-weight: 500;
-        }
-        .info-value {
-            color: #ffffff;
-            font-weight: 600;
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 0.2rem 0.6rem;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            font-weight: 600;
-        }
-        .badge-success {
-            background-color: #10b981;
-            color: white;
-        }
-        .badge-error {
-            background-color: #ef4444;
-            color: white;
-        }
-        .badge-warning {
-            background-color: #f59e0b;
-            color: white;
-        }
-        .badge-info {
-            background-color: #3b82f6;
-            color: white;
-        }
-    </style>
-    """, unsafe_allow_html=True)
 
 # Stats area
 if show_stats:
     st.divider()
-    stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4, gap="medium")
+    stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
     with stats_col1:
         frame_counter = st.empty()
     with stats_col2:
@@ -182,7 +104,10 @@ if show_stats:
 progress_bar = st.progress(0)
 
 def detect_blur(frame, threshold=100.0):
-    """Detect blur using Laplacian variance method - GPU optimized"""
+    """
+    Detect blur using Laplacian variance method - optimized for GPU.
+    """
+    # Use GPU if available
     try:
         if cv2.ocl.useOpenCL():
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -202,20 +127,51 @@ def detect_blur(frame, threshold=100.0):
     return blur_score, status
 
 def enhance_frame(frame, status, strength=1.1):
-    """Enhance frame only if blurry"""
+    """
+    Enhance frame only if blurry, otherwise return original.
+    
+    Args:
+        frame: Input frame (BGR)
+        status: "Clear" or "Blurry"
+        strength: Enhancement strength multiplier
+        
+    Returns:
+        enhanced_frame: Enhanced frame if blurry, original if clear
+        was_enhanced: Boolean indicating if enhancement was applied
+    """
     if status == "Blurry":
+        # Apply sharpening kernel
         kernel = np.array([[-1, -1, -1],
                           [-1,  9, -1],
                           [-1, -1, -1]])
         sharpened = cv2.filter2D(frame, -1, kernel)
+        
+        # Increase brightness
         enhanced = cv2.convertScaleAbs(sharpened, alpha=strength, beta=10)
+        
         return enhanced, True
     else:
+        # Return original frame without processing
         return frame, False
+
+def process_frame_batch(frames, enable_blur, blur_threshold, gpu_enabled):
+    """Process a batch of frames in parallel"""
+    results = []
+    for frame in frames:
+        result = {'original': frame}
+        
+        if enable_blur:
+            blur_score, blur_status = detect_blur(frame, blur_threshold)
+            result['blur_score'] = blur_score
+            result['blur_status'] = blur_status
+        
+        results.append(result)
+    return results
 
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
                         update_interval=5, use_threading=True, enable_enhance=False, enhance_strength=1.1):
     """Process video with optimized performance"""
+    # Enable GPU acceleration via OpenCL
     gpu_info = {}
     try:
         cv2.ocl.setUseOpenCL(True)
@@ -229,7 +185,10 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
         gpu_info['opencl_available'] = False
         gpu_info['opencl_enabled'] = False
     
+    # Hardware-accelerated video decoding
     cap = cv2.VideoCapture(str(video_path), cv2.CAP_ANY)
+    
+    # Set buffer size for better performance
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
     
     try:
@@ -242,6 +201,7 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
         st.error(f"Cannot open video: {video_path}")
         return
     
+    # Get video properties
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -255,7 +215,10 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
     start_time = time.time()
     prev_time = start_time
     
+    # Threading pool for parallel processing
     executor = ThreadPoolExecutor(max_workers=4) if use_threading else None
+    frame_batch = []
+    batch_size = 4 if use_threading else 1
     
     while cap.isOpened():
         ret, frame = cap.read()
@@ -265,10 +228,13 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
         
         frame_count += 1
         
+        # Skip frames if requested
         if skip_frames > 0 and frame_count % (skip_frames + 1) != 0:
             continue
         
+        # Only update UI every N frames for performance
         if frame_count % update_interval != 0:
+            # Still process but don't yield
             if enable_blur:
                 blur_score, blur_status = detect_blur(frame, blur_threshold)
                 if blur_status == "Blurry":
@@ -277,11 +243,13 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                     clear_count += 1
             continue
         
+        
         current_time = time.time()
         elapsed = current_time - prev_time
         current_fps = 1.0 / elapsed if elapsed > 0 else 0
         prev_time = current_time
         
+        # Step 2: Blur detection (optimized)
         blur_score = 0
         blur_status = "N/A"
         blur_frame = None
@@ -295,11 +263,13 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                 clear_count += 1
                 status_color = (0, 255, 0)
             
+            # Create blur visualization (minimal operations)
             blur_frame = frame.copy()
             cv2.putText(blur_frame, f"Score: {blur_score:.1f} | {blur_status}", 
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
             blur_frame = cv2.cvtColor(blur_frame, cv2.COLOR_BGR2RGB)
         
+        # Step 3: Conditional enhancement
         enhanced_frame = None
         was_enhanced = False
         
@@ -307,23 +277,27 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
             enhanced_result, was_enhanced = enhance_frame(frame, blur_status, enhance_strength)
             if was_enhanced:
                 enhanced_count += 1
-                enhance_color = (0, 165, 255)
+                enhance_color = (0, 165, 255)  # Orange
                 enhance_text = "ENHANCED"
             else:
                 skipped_count += 1
-                enhance_color = (0, 255, 0)
+                enhance_color = (0, 255, 0)  # Green
                 enhance_text = "ORIGINAL"
             
+            # Create enhancement visualization
             enhanced_frame = enhanced_result.copy()
             cv2.putText(enhanced_frame, f"{enhance_text}", 
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, enhance_color, 2)
             enhanced_frame = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2RGB)
         
+        # Minimal overlay on original frame
         display_frame = frame.copy()
         cv2.putText(display_frame, f"Frame: {frame_count}", 
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(display_frame, f"FPS: {current_fps:.1f}", 
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # Convert BGR to RGB
         display_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         
         yield {
@@ -362,69 +336,72 @@ if process_button:
             st.warning("Processing stopped by user")
             break
         
+        # Display original frame
         frame_placeholder.image(data['frame'], channels="RGB", use_container_width=True)
         
+        # Display blur detection frame
         if data['blur_frame'] is not None:
             blur_placeholder.image(data['blur_frame'], channels="RGB", use_container_width=True)
         else:
             blur_placeholder.info("Blur detection disabled")
         
+        # Display enhanced frame
         if data['enhanced_frame'] is not None:
             enhance_placeholder.image(data['enhanced_frame'], channels="RGB", use_container_width=True)
         else:
             enhance_placeholder.info("Enhancement disabled")
         
+        # Display processing info
         gpu_info = data['gpu_info']
-        opencl_enabled = gpu_info.get('opencl_enabled', False)
-        hw_decode = gpu_info.get('hw_decode', False)
-        gpu_device = gpu_info.get('device_name', 'Unknown') if gpu_info.get('opencl_available', False) else 'N/A'
+        gpu_status = "âœ… Enabled" if gpu_info.get('opencl_enabled', False) else "âŒ Disabled"
+        hw_decode_status = "âœ… Yes" if gpu_info.get('hw_decode', False) else "âŒ No"
         
-        blur_status_color = "🟢" if data['blur_status'] == 'Clear' else "🟡"
-        efficiency = (data['skipped_count']/(data['enhanced_count']+data['skipped_count'])*100) if (data['enhanced_count']+data['skipped_count']) > 0 else 0
+        gpu_details = ""
+        if gpu_info.get('opencl_available', False):
+            gpu_details = f"\n        - Device: {gpu_info.get('device_name', 'Unknown')}"
         
-        # Use container with markdown for better rendering
-        with info_placeholder.container():
-            st.markdown("#### 🎬 Video Properties")
-            st.text(f"Resolution: {data['width']}x{data['height']}")
-            st.text(f"Original FPS: {data['video_fps']:.2f}")
-            
-            st.markdown("---")
-            st.markdown("#### ⚡ GPU Acceleration")
-            st.text(f"OpenCL: {'✅ Enabled' if opencl_enabled else '❌ Disabled'}")
-            if gpu_info.get('opencl_available', False):
-                st.caption(f"Device: {gpu_device}")
-            st.text(f"HW Decode: {'✅ Yes' if hw_decode else '❌ No'}")
-            
-            st.markdown("---")
-            st.markdown("#### 🔍 Step 2: Blur Detection")
-            st.text(f"Blur Score: {data['blur_score']:.2f}")
-            st.text(f"Status: {blur_status_color} {data['blur_status']}")
-            st.text(f"Clear: {data['clear_count']} | Blurry: {data['blurry_count']}")
-            
-            st.markdown("---")
-            st.markdown("#### ✨ Step 3: Enhancement")
-            st.text(f"Enhanced: {data['enhanced_count']}")
-            st.text(f"Skipped: {data['skipped_count']}")
-            st.text(f"Efficiency: {efficiency:.1f}%")
-            
-            st.markdown("---")
-            st.markdown("#### 📈 Status")
-            st.text(f"Processing FPS: {data['current_fps']:.2f}")
-            st.text(f"Frame: {data['frame_count']}/{data['total_frames']}")
-            st.text(f"Progress: {(data['frame_count']/data['total_frames']*100):.1f}%")
+        info_text = f"""
+        **Video Properties:**
+        - Resolution: {data['width']}x{data['height']}
+        - Original FPS: {data['video_fps']:.2f}
         
+        **GPU Acceleration:**
+        - OpenCL: {gpu_status}{gpu_details}
+        - HW Decode: {hw_decode_status}
+        
+        **Step 2: Blur Detection:**
+        - Blur Score: {data['blur_score']:.2f}
+        - Status: {data['blur_status']}
+        - Clear: {data['clear_count']}
+        - Blurry: {data['blurry_count']}
+        
+        **Step 3: Enhancement:**
+        - Enhanced: {data['enhanced_count']}
+        - Skipped: {data['skipped_count']}
+        - Efficiency: {(data['skipped_count']/(data['enhanced_count']+data['skipped_count'])*100) if (data['enhanced_count']+data['skipped_count']) > 0 else 0:.1f}%
+        
+        **Status:**
+        - FPS: {data['current_fps']:.2f}
+        - Frame: {data['frame_count']}/{data['total_frames']}
+        - Progress: {(data['frame_count']/data['total_frames']*100):.1f}%
+        """
+        info_placeholder.markdown(info_text)
+        
+        # Update stats
         if show_stats:
             frame_counter.metric("Frame", f"{data['frame_count']}/{data['total_frames']}")
             fps_display.metric("Processing FPS", f"{data['current_fps']:.2f}")
             progress_display.metric("Progress", f"{(data['frame_count']/data['total_frames']*100):.1f}%")
             time_display.metric("Elapsed Time", f"{data['elapsed_time']:.1f}s")
         
+        # Update progress bar (less frequently)
         if data['frame_count'] % max(1, update_interval) == 0:
             progress_bar.progress(data['frame_count'] / data['total_frames'])
     
     st.session_state.processing = False
-    st.success("✅ Video processing complete!")
+    st.success("âœ… Video processing complete!")
 
+# Initial state
 if 'processing' not in st.session_state:
     st.session_state.processing = False
-    st.info("👈 Select a video and click 'Process Video' to start")
+    st.info("ðŸ‘ˆ Select a video and click 'Process Video' to start")
