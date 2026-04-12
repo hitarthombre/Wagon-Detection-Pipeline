@@ -4,36 +4,76 @@ import time
 import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import easyocr
 
 st.set_page_config(page_title="AI Video Processing Pipeline", layout="wide")
 
-# Custom CSS for card layout with better spacing
+# Custom CSS for clean, compact layout
 st.markdown("""
 <style>
     .stApp {
         background-color: #0e1117;
     }
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
     div[data-testid="column"] {
         background-color: #1e2130;
-        padding: 1.5rem;
-        border-radius: 12px;
+        padding: 0.8rem;
+        border-radius: 8px;
         border: 1px solid #2e3140;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
     .main-title {
-        font-size: 2.5rem;
+        font-size: 1.8rem;
         font-weight: bold;
-        margin-bottom: 2rem;
+        margin-bottom: 0.5rem;
         text-align: center;
         color: #ffffff;
     }
     .stImage {
-        border-radius: 8px;
+        border-radius: 6px;
         overflow: hidden;
     }
     h3 {
         margin-top: 0 !important;
         padding-top: 0 !important;
+        font-size: 1rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+    .ocr-data-box {
+        background-color: #1a1d2e;
+        border: 1px solid #2e3140;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 0.5rem;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+    .ocr-entry {
+        background-color: #252837;
+        padding: 0.5rem;
+        margin-bottom: 0.5rem;
+        border-radius: 4px;
+        border-left: 3px solid #10b981;
+    }
+    .ocr-timestamp {
+        color: #10b981;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .ocr-text {
+        color: #ffffff;
+        font-size: 0.9rem;
+        margin-top: 0.3rem;
+    }
+    .ocr-confidence {
+        color: #a0a0a0;
+        font-size: 0.8rem;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.2rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -63,8 +103,6 @@ with st.sidebar:
     skip_frames = st.slider("Skip Frames", 0, 10, 0)
     update_interval = st.slider("UI Update Interval", 1, 30, 5, 
                                 help="Update UI every N frames for better performance")
-    use_threading = st.checkbox("Multi-threaded Processing", value=True)
-    show_stats = st.checkbox("Show Statistics", value=True)
     
     st.divider()
     st.subheader("🔧 Pipeline Steps")
@@ -76,110 +114,52 @@ with st.sidebar:
                                     help="Enhance only blurry frames")
     if enable_enhancement:
         enhancement_strength = st.slider("Enhancement Strength", 1.0, 2.0, 1.1, 0.1)
+    
+    enable_ocr = st.checkbox("Step 4: OCR Text Extraction", value=False,
+                            help="Extract text from frames (slower)")
+    if enable_ocr:
+        ocr_confidence_threshold = st.slider("OCR Confidence Threshold", 0.5, 1.0, 0.7, 0.05)
+        ocr_interval = st.slider("OCR Capture Interval (seconds)", 1, 10, 1,
+                                help="Capture OCR data every N seconds")
 
-# Main content area with proper gaps
-col1, col2, col3, col4 = st.columns([3, 3, 3, 2], gap="large")
+# Main content area - compact layout
+col1, col2, col3, col4 = st.columns([3, 3, 3, 3], gap="small")
 
 with col1:
-    st.markdown("### 📹 Step 1: Original")
+    st.markdown("### 📹 Original")
     frame_placeholder = st.empty()
 
 with col2:
-    st.markdown("### 🔍 Step 2: Blur Detection")
+    st.markdown("### 🔍 Blur Detection")
     blur_placeholder = st.empty()
 
 with col3:
-    st.markdown("### ✨ Step 3: Enhanced")
+    st.markdown("### ✨ Enhanced")
     enhance_placeholder = st.empty()
 
 with col4:
-    st.markdown("### 📊 Info")
-    info_placeholder = st.empty()
-    
-    # Add custom CSS for info card styling
-    st.markdown("""
-    <style>
-        .info-card {
-            background: linear-gradient(135deg, #1e2130 0%, #2a2d3e 100%);
-            padding: 1.5rem;
-            border-radius: 12px;
-            border: 1px solid #3a3d50;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            margin-bottom: 1rem;
-        }
-        .info-section {
-            margin-bottom: 1.5rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid #3a3d50;
-        }
-        .info-section:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-        .info-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            color: #ffffff;
-            margin-bottom: 0.8rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .info-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.4rem 0;
-            font-size: 0.9rem;
-        }
-        .info-label {
-            color: #a0a0a0;
-            font-weight: 500;
-        }
-        .info-value {
-            color: #ffffff;
-            font-weight: 600;
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 0.2rem 0.6rem;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            font-weight: 600;
-        }
-        .badge-success {
-            background-color: #10b981;
-            color: white;
-        }
-        .badge-error {
-            background-color: #ef4444;
-            color: white;
-        }
-        .badge-warning {
-            background-color: #f59e0b;
-            color: white;
-        }
-        .badge-info {
-            background-color: #3b82f6;
-            color: white;
-        }
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown("### 📝 OCR")
+    ocr_placeholder = st.empty()
 
-# Stats area
-if show_stats:
-    st.divider()
-    stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4, gap="medium")
-    with stats_col1:
-        frame_counter = st.empty()
-    with stats_col2:
-        fps_display = st.empty()
-    with stats_col3:
-        progress_display = st.empty()
-    with stats_col4:
-        time_display = st.empty()
+# Stats area - compact
+st.divider()
+stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4, gap="small")
+with stats_col1:
+    frame_counter = st.empty()
+with stats_col2:
+    fps_display = st.empty()
+with stats_col3:
+    progress_display = st.empty()
+with stats_col4:
+    time_display = st.empty()
 
 progress_bar = st.progress(0)
+
+# OCR Data Display Section
+if enable_ocr:
+    st.divider()
+    st.markdown("### 📊 OCR Data (Captured Every Second)")
+    ocr_data_container = st.empty()
 
 def detect_blur(frame, threshold=100.0):
     """Detect blur using Laplacian variance method - GPU optimized"""
@@ -213,9 +193,33 @@ def enhance_frame(frame, status, strength=1.1):
     else:
         return frame, False
 
+def perform_ocr(frame, ocr_engine, confidence_threshold=0.7):
+    """Perform OCR on frame using EasyOCR"""
+    results = ocr_engine.readtext(frame)
+    
+    ocr_frame = frame.copy()
+    text_results = []
+    
+    for bbox, text, confidence in results:
+        if confidence >= confidence_threshold:
+            points = np.array(bbox, dtype=np.int32)
+            cv2.polylines(ocr_frame, [points], True, (0, 255, 0), 2)
+            text_pos = (int(points[0][0]), int(points[0][1]) - 10)
+            cv2.putText(ocr_frame, f"{text} ({confidence:.2f})", 
+                       text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            text_results.append({'text': text, 'confidence': confidence})
+    
+    return ocr_frame, text_results
+
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
-                        update_interval=5, use_threading=True, enable_enhance=False, enhance_strength=1.1):
+                        update_interval=5, enable_enhance=False, enhance_strength=1.1,
+                        enable_ocr=False, ocr_confidence=0.7, ocr_interval=1):
     """Process video with optimized performance"""
+    # Initialize OCR if enabled
+    ocr_engine = None
+    if enable_ocr:
+        ocr_engine = easyocr.Reader(['en'], gpu=True)
+    
     gpu_info = {}
     try:
         cv2.ocl.setUseOpenCL(True)
@@ -252,10 +256,11 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
     clear_count = 0
     enhanced_count = 0
     skipped_count = 0
+    total_text_detected = 0
     start_time = time.time()
     prev_time = start_time
-    
-    executor = ThreadPoolExecutor(max_workers=4) if use_threading else None
+    last_ocr_time = start_time
+    ocr_data_log = []  # Store OCR data with timestamps
     
     while cap.isOpened():
         ret, frame = cap.read()
@@ -302,6 +307,7 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
         
         enhanced_frame = None
         was_enhanced = False
+        enhanced_result = frame
         
         if enable_enhance and enable_blur:
             enhanced_result, was_enhanced = enhance_frame(frame, blur_status, enhance_strength)
@@ -319,6 +325,33 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, enhance_color, 2)
             enhanced_frame = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2RGB)
         
+        ocr_frame = None
+        text_results = []
+        should_capture_ocr = False
+        
+        if enable_ocr and ocr_engine:
+            # Check if it's time to capture OCR (every N seconds)
+            if current_time - last_ocr_time >= ocr_interval:
+                should_capture_ocr = True
+                last_ocr_time = current_time
+            
+            ocr_result, text_results = perform_ocr(enhanced_result, ocr_engine, ocr_confidence)
+            total_text_detected += len(text_results)
+            
+            # Log OCR data if it's time to capture
+            if should_capture_ocr and text_results:
+                elapsed_seconds = int(current_time - start_time)
+                ocr_data_log.append({
+                    'timestamp': elapsed_seconds,
+                    'frame': frame_count,
+                    'texts': text_results
+                })
+            
+            ocr_frame = ocr_result.copy()
+            cv2.putText(ocr_frame, f"Text: {len(text_results)}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            ocr_frame = cv2.cvtColor(ocr_frame, cv2.COLOR_BGR2RGB)
+        
         display_frame = frame.copy()
         cv2.putText(display_frame, f"Frame: {frame_count}", 
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -330,6 +363,8 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
             'frame': display_frame,
             'blur_frame': blur_frame,
             'enhanced_frame': enhanced_frame,
+            'ocr_frame': ocr_frame,
+            'text_results': text_results,
             'frame_count': frame_count,
             'total_frames': total_frames,
             'current_fps': current_fps,
@@ -343,11 +378,11 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
             'clear_count': clear_count,
             'blurry_count': blurry_count,
             'enhanced_count': enhanced_count,
-            'skipped_count': skipped_count
+            'skipped_count': skipped_count,
+            'total_text_detected': total_text_detected,
+            'ocr_data_log': ocr_data_log
         }
     
-    if executor:
-        executor.shutdown()
     cap.release()
 
 # Process video when button is clicked
@@ -356,8 +391,10 @@ if process_button:
     
     for data in process_video_stream(selected_video, skip_frames, enable_blur_detection, 
                                       blur_threshold if enable_blur_detection else 100.0,
-                                      update_interval, use_threading, enable_enhancement,
-                                      enhancement_strength if enable_enhancement else 1.1):
+                                      update_interval, enable_enhancement,
+                                      enhancement_strength if enable_enhancement else 1.1,
+                                      enable_ocr, ocr_confidence_threshold if enable_ocr else 0.7,
+                                      ocr_interval if enable_ocr else 1):
         if stop_button or not st.session_state.get('processing', False):
             st.warning("Processing stopped by user")
             break
@@ -367,60 +404,38 @@ if process_button:
         if data['blur_frame'] is not None:
             blur_placeholder.image(data['blur_frame'], channels="RGB", use_container_width=True)
         else:
-            blur_placeholder.info("Blur detection disabled")
+            blur_placeholder.info("Disabled")
         
         if data['enhanced_frame'] is not None:
             enhance_placeholder.image(data['enhanced_frame'], channels="RGB", use_container_width=True)
         else:
-            enhance_placeholder.info("Enhancement disabled")
+            enhance_placeholder.info("Disabled")
         
-        gpu_info = data['gpu_info']
-        opencl_enabled = gpu_info.get('opencl_enabled', False)
-        hw_decode = gpu_info.get('hw_decode', False)
-        gpu_device = gpu_info.get('device_name', 'Unknown') if gpu_info.get('opencl_available', False) else 'N/A'
+        if data['ocr_frame'] is not None:
+            ocr_placeholder.image(data['ocr_frame'], channels="RGB", use_container_width=True)
+        else:
+            ocr_placeholder.info("Disabled")
         
-        blur_status_color = "🟢" if data['blur_status'] == 'Clear' else "🟡"
-        efficiency = (data['skipped_count']/(data['enhanced_count']+data['skipped_count'])*100) if (data['enhanced_count']+data['skipped_count']) > 0 else 0
+        # Update stats
+        frame_counter.metric("Frame", f"{data['frame_count']}/{data['total_frames']}")
+        fps_display.metric("FPS", f"{data['current_fps']:.1f}")
+        progress_display.metric("Progress", f"{(data['frame_count']/data['total_frames']*100):.1f}%")
+        time_display.metric("Time", f"{data['elapsed_time']:.1f}s")
         
-        # Use container with markdown for better rendering
-        with info_placeholder.container():
-            st.markdown("#### 🎬 Video Properties")
-            st.text(f"Resolution: {data['width']}x{data['height']}")
-            st.text(f"Original FPS: {data['video_fps']:.2f}")
-            
-            st.markdown("---")
-            st.markdown("#### ⚡ GPU Acceleration")
-            st.text(f"OpenCL: {'✅ Enabled' if opencl_enabled else '❌ Disabled'}")
-            if gpu_info.get('opencl_available', False):
-                st.caption(f"Device: {gpu_device}")
-            st.text(f"HW Decode: {'✅ Yes' if hw_decode else '❌ No'}")
-            
-            st.markdown("---")
-            st.markdown("#### 🔍 Step 2: Blur Detection")
-            st.text(f"Blur Score: {data['blur_score']:.2f}")
-            st.text(f"Status: {blur_status_color} {data['blur_status']}")
-            st.text(f"Clear: {data['clear_count']} | Blurry: {data['blurry_count']}")
-            
-            st.markdown("---")
-            st.markdown("#### ✨ Step 3: Enhancement")
-            st.text(f"Enhanced: {data['enhanced_count']}")
-            st.text(f"Skipped: {data['skipped_count']}")
-            st.text(f"Efficiency: {efficiency:.1f}%")
-            
-            st.markdown("---")
-            st.markdown("#### 📈 Status")
-            st.text(f"Processing FPS: {data['current_fps']:.2f}")
-            st.text(f"Frame: {data['frame_count']}/{data['total_frames']}")
-            st.text(f"Progress: {(data['frame_count']/data['total_frames']*100):.1f}%")
+        progress_bar.progress(data['frame_count'] / data['total_frames'])
         
-        if show_stats:
-            frame_counter.metric("Frame", f"{data['frame_count']}/{data['total_frames']}")
-            fps_display.metric("Processing FPS", f"{data['current_fps']:.2f}")
-            progress_display.metric("Progress", f"{(data['frame_count']/data['total_frames']*100):.1f}%")
-            time_display.metric("Elapsed Time", f"{data['elapsed_time']:.1f}s")
-        
-        if data['frame_count'] % max(1, update_interval) == 0:
-            progress_bar.progress(data['frame_count'] / data['total_frames'])
+        # Display OCR data log
+        if enable_ocr and data['ocr_data_log']:
+            ocr_html = '<div class="ocr-data-box">'
+            for entry in reversed(data['ocr_data_log'][-10:]):  # Show last 10 entries
+                ocr_html += f'<div class="ocr-entry">'
+                ocr_html += f'<div class="ocr-timestamp">⏱️ {entry["timestamp"]}s (Frame {entry["frame"]})</div>'
+                for text_item in entry['texts']:
+                    ocr_html += f'<div class="ocr-text">📝 {text_item["text"]}</div>'
+                    ocr_html += f'<div class="ocr-confidence">Confidence: {text_item["confidence"]:.2%}</div>'
+                ocr_html += '</div>'
+            ocr_html += '</div>'
+            ocr_data_container.markdown(ocr_html, unsafe_allow_html=True)
     
     st.session_state.processing = False
     st.success("✅ Video processing complete!")
