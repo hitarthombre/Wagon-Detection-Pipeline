@@ -1,0 +1,13 @@
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 1
+names: ['wagon']
+
+roboflow:
+  workspace: student-ih3dc
+  project: wagon-detection-qc7bh
+  version: 1
+  license: Public Domain
+  url: https://universe.roboflow.com/student-ih3dc/wagon-detection-qc7bh/dataset/1
