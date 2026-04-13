@@ -42,6 +42,18 @@ streamlit run app.py
 
 **Output:** Web-based GUI with real-time preview
 
+### OCR Comparison Tool (NEW) 🆕
+```bash
+streamlit run ocr_comparison_app.py
+```
+
+**Features:**
+- Compare TrOCR, PaddleOCR 2.7.x, and Tesseract
+- Upload images or use webcam
+- Real-time OCR with confidence scores
+- Bounding box visualization
+- Performance metrics
+
 ## 📦 Installation
 
 ```bash

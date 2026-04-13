@@ -1,0 +1,23 @@
+# OCR Comparison App Requirements
+
+# Core dependencies
+streamlit>=1.28.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+pillow>=10.0.0
+
+# OCR Engines
+# TrOCR (Transformer-based)
+transformers>=4.30.0
+torch>=2.0.0
+
+# PaddleOCR (STABLE 2.7.x - DO NOT use 3.x)
+paddleocr==2.7.0.3
+paddlepaddle>=2.5.0  # CPU version
+# paddlepaddle-gpu>=2.5.0  # Uncomment for GPU support
+
+# Tesseract OCR
+pytesseract>=0.3.10
+# Note: Also requires Tesseract binary installation
+# Windows: https://github.com/UB-Mannheim/tesseract/wiki
+# Linux: sudo apt-get install tesseract-ocr
