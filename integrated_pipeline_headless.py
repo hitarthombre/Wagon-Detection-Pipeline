@@ -3,7 +3,18 @@ import numpy as np
 import time
 import os
 from ultralytics import YOLO
-import easyocr
+
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+
+try:
+    from paddleocr import PaddleOCR
+    PADDLEOCR_AVAILABLE = True
+except ImportError:
+    PADDLEOCR_AVAILABLE = False
 
 def detect_blur(frame, threshold=100.0):
     """Detect blur using Laplacian variance method"""
@@ -89,22 +100,48 @@ def preprocess_for_ocr(frame):
     preprocessed = cv2.cvtColor(morph, cv2.COLOR_GRAY2BGR)
     return preprocessed
 
-def perform_ocr_enhanced(frame, ocr_engine, use_preprocessing=True):
+def perform_ocr_enhanced(frame, ocr_engine, use_preprocessing=True, ocr_type='easyocr'):
     """Perform OCR with enhanced preprocessing for better accuracy"""
     if use_preprocessing:
         processed_frame = preprocess_for_ocr(frame)
-        results_original = ocr_engine.readtext(frame)
-        results_processed = ocr_engine.readtext(processed_frame)
         
-        # Combine and deduplicate
-        combined_results = {}
-        for bbox, text, confidence in results_original + results_processed:
-            if text not in combined_results or confidence > combined_results[text][1]:
-                combined_results[text] = (bbox, confidence)
-        
-        results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
+        if ocr_type == 'paddleocr':
+            # PaddleOCR format
+            results_original = ocr_engine.ocr(frame, cls=True)
+            results_processed = ocr_engine.ocr(processed_frame, cls=True)
+            
+            # Combine and deduplicate
+            combined_results = {}
+            for result_set in [results_original, results_processed]:
+                if result_set and result_set[0]:
+                    for line in result_set[0]:
+                        bbox, (text, confidence) = line
+                        if text not in combined_results or confidence > combined_results[text][1]:
+                            combined_results[text] = (bbox, confidence)
+            
+            results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
+        else:
+            # EasyOCR format
+            results_original = ocr_engine.readtext(frame)
+            results_processed = ocr_engine.readtext(processed_frame)
+            
+            # Combine and deduplicate
+            combined_results = {}
+            for bbox, text, confidence in results_original + results_processed:
+                if text not in combined_results or confidence > combined_results[text][1]:
+                    combined_results[text] = (bbox, confidence)
+            
+            results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
     else:
-        results = ocr_engine.readtext(frame)
+        if ocr_type == 'paddleocr':
+            result = ocr_engine.ocr(frame, cls=True)
+            results = []
+            if result and result[0]:
+                for line in result[0]:
+                    bbox, (text, confidence) = line
+                    results.append((bbox, text, confidence))
+        else:
+            results = ocr_engine.readtext(frame)
     
     ocr_frame = frame.copy()
     text_results = []
@@ -139,7 +176,7 @@ def perform_ocr_enhanced(frame, ocr_engine, use_preprocessing=True):
 def process_integrated_pipeline_headless(video_path, model_name='yolov8n.pt', 
                                         blur_threshold=100.0, conf_threshold=0.25,
                                         enable_ocr=True, use_gpu=True, save_output=True,
-                                        save_video=True):
+                                        save_video=True, ocr_engine='easyocr'):
     """
     Headless pipeline that saves output video instead of displaying.
     Perfect for environments without GUI support.
@@ -155,11 +192,27 @@ def process_integrated_pipeline_headless(video_path, model_name='yolov8n.pt',
     yolo_model = YOLO(model_name)
     print("YOLOv8 model loaded")
     
-    ocr_engine = None
+    ocr_engine_obj = None
     if enable_ocr:
-        print(f"Initializing EasyOCR (GPU: {use_gpu})...")
-        ocr_engine = easyocr.Reader(['en'], gpu=use_gpu)
-        print("EasyOCR initialized")
+        if ocr_engine == 'paddleocr':
+            if not PADDLEOCR_AVAILABLE:
+                print("PaddleOCR not installed. Install with: pip install paddleocr")
+                print("Falling back to EasyOCR...")
+                ocr_engine = 'easyocr'
+            else:
+                print(f"Initializing PaddleOCR (GPU: {use_gpu})...")
+                ocr_engine_obj = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=use_gpu, show_log=False)
+                print("PaddleOCR initialized")
+        
+        if ocr_engine == 'easyocr':
+            if not EASYOCR_AVAILABLE:
+                print("EasyOCR not installed. Install with: pip install easyocr")
+                print("Disabling OCR...")
+                enable_ocr = False
+            else:
+                print(f"Initializing EasyOCR (GPU: {use_gpu})...")
+                ocr_engine_obj = easyocr.Reader(['en'], gpu=use_gpu)
+                print("EasyOCR initialized")
     
     cap = cv2.VideoCapture(video_path)
     
@@ -254,9 +307,9 @@ def process_integrated_pipeline_headless(video_path, model_name='yolov8n.pt',
                 f.write("\n")
         
         # Step 5: OCR (if enabled)
-        if enable_ocr and ocr_engine:
+        if enable_ocr and ocr_engine_obj:
             ocr_frame, text_results = perform_ocr_enhanced(
-                detected_frame, ocr_engine, use_preprocessing=True
+                detected_frame, ocr_engine_obj, use_preprocessing=True, ocr_type=ocr_engine
             )
             total_text_detected += len(text_results)
             
@@ -364,8 +417,13 @@ if __name__ == "__main__":
             print("  use_gpu (default: True)")
             print("  save_output (default: True)")
             print("  save_video (default: True)")
+            print("  ocr_engine (default: easyocr)")
+            print("\nOCR Engines:")
+            print("  easyocr   - EasyOCR (default)")
+            print("  paddleocr - PaddleOCR (faster, often more accurate)")
             print("\nExample:")
-            print("  python integrated_pipeline_headless.py video.mp4 yolov8n.pt 100 0.25 True True True True")
+            print("  python integrated_pipeline_headless.py video.mp4 yolov8n.pt 100 0.25 True True True True easyocr")
+            print("  python integrated_pipeline_headless.py video.mp4 yolov8n.pt 100 0.25 True True True True paddleocr")
             print("\nNote: This is a headless version that saves output video instead of displaying.")
             print("      Perfect for environments without GUI support.")
             sys.exit(1)
@@ -380,7 +438,12 @@ if __name__ == "__main__":
     use_gpu = sys.argv[6].lower() == 'true' if len(sys.argv) > 6 else True
     save_output = sys.argv[7].lower() == 'true' if len(sys.argv) > 7 else True
     save_video = sys.argv[8].lower() == 'true' if len(sys.argv) > 8 else True
+    ocr_engine = sys.argv[9].lower() if len(sys.argv) > 9 else 'easyocr'
+    
+    if ocr_engine not in ['easyocr', 'paddleocr']:
+        print(f"Invalid OCR engine: {ocr_engine}. Using 'easyocr'")
+        ocr_engine = 'easyocr'
     
     process_integrated_pipeline_headless(video_path, model_name, blur_threshold, 
                                         conf_threshold, enable_ocr, use_gpu, 
-                                        save_output, save_video)
+                                        save_output, save_video, ocr_engine)

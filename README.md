@@ -7,6 +7,7 @@ OpenCV + YOLOv8 video processing with confidence scores, enhanced OCR, and autom
 ✅ **Manual Confidence Display** - See exact detection confidence (0.00-1.00)  
 ✅ **Green Bounding Boxes** - Clear visualization with 2-decimal precision  
 ✅ **Enhanced OCR** - 15-25% accuracy improvement with preprocessing  
+✅ **Dual OCR Engines** - Choose between EasyOCR or PaddleOCR (2-3x faster)  
 ✅ **Output Storage** - Automatic saving to `output/` folder  
 ✅ **Headless Processing** - Works without GUI support  
 ✅ **Fast Mode** - 15-20 FPS without OCR  
@@ -24,11 +25,15 @@ python quick_process.py video/video_test_1.mp4
 
 ### With OCR
 ```bash
+# Using EasyOCR (default)
 python integrated_pipeline_headless.py video/video_test_1.mp4
+
+# Using PaddleOCR (2-3x faster)
+python integrated_pipeline_headless.py video/video_test_1.mp4 yolov8n.pt 100 0.25 True True True True paddleocr
 ```
 
 **Output:** Video + detections + OCR results  
-**Speed:** ~2-4 FPS
+**Speed:** ~2-4 FPS (EasyOCR) / ~5-7 FPS (PaddleOCR)
 
 ### Interactive Dashboard
 ```bash
@@ -40,7 +45,11 @@ streamlit run app.py
 ## 📦 Installation
 
 ```bash
+# Basic installation
 pip install opencv-python ultralytics easyocr numpy streamlit
+
+# Optional: Install PaddleOCR (2-3x faster OCR)
+pip install paddleocr
 ```
 
 ## 📊 Output
@@ -89,6 +98,7 @@ python quick_process.py video.mp4 yolov8n.pt 100 0.50
 ## 📚 Documentation
 
 - **USAGE_GUIDE.md** - Detailed usage instructions
+- **PADDLEOCR_GUIDE.md** - PaddleOCR integration guide
 - **README_ENHANCEMENTS.md** - Technical implementation
 - **QUICKSTART_ENHANCED.md** - Quick examples
 - **FEATURE_COMPARISON.md** - Before/after comparison
@@ -107,7 +117,8 @@ Expected: All 5 tests pass ✅
 | Mode | Speed | OCR | Output |
 |------|-------|-----|--------|
 | Fast | 15-20 FPS | ❌ | Video + Detections |
-| Complete | 2-4 FPS | ✅ | Video + Detections + OCR |
+| Complete (EasyOCR) | 2-4 FPS | ✅ | Video + Detections + OCR |
+| Complete (PaddleOCR) | 5-7 FPS | ✅ | Video + Detections + OCR |
 | Dashboard | 3-5 FPS | ✅ | Web Interface |
 
 ## 🎯 Use Cases
@@ -120,9 +131,13 @@ start output\video_test_1_processed.mp4
 
 **Complete Analysis**
 ```bash
+# With EasyOCR
 python integrated_pipeline_headless.py video/video_test_1.mp4
 type output\video_test_1_detections.txt
 type output\video_test_1_ocr_results.txt
+
+# With PaddleOCR (faster)
+python integrated_pipeline_headless.py video/video_test_1.mp4 yolov8n.pt 100 0.25 True True True True paddleocr
 ```
 
 **Batch Processing**
@@ -174,8 +189,11 @@ See **USAGE_GUIDE.md** for comprehensive instructions and examples.
 # Fast demo
 python quick_process.py video/video_test_1.mp4
 
-# Complete analysis
+# Complete analysis (EasyOCR)
 python integrated_pipeline_headless.py video/video_test_1.mp4
+
+# Complete analysis (PaddleOCR - faster)
+python integrated_pipeline_headless.py video/video_test_1.mp4 yolov8n.pt 100 0.25 True True True True paddleocr
 
 # Interactive
 streamlit run app.py
