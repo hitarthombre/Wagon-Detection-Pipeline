@@ -4,7 +4,21 @@ import time
 import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-import easyocr
+
+# Import OCR engines
+try:
+    from ocr_engines import TrOCREngine, PaddleOCREngine, TesseractEngine
+    OCR_ENGINES_AVAILABLE = True
+except ImportError:
+    OCR_ENGINES_AVAILABLE = False
+    print("OCR engines not available. Install with: pip install -r requirements_ocr_comparison.txt")
+
+# Fallback to EasyOCR if available
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
 
 st.set_page_config(page_title="AI Video Processing Pipeline", layout="wide")
 
@@ -117,10 +131,41 @@ with st.sidebar:
     
     enable_ocr = st.checkbox("Step 4: OCR Text Extraction", value=False,
                             help="Extract text from frames (slower)")
+    
+    # OCR Engine Selection
     if enable_ocr:
-        ocr_confidence_threshold = st.slider("OCR Confidence Threshold", 0.5, 1.0, 0.7, 0.05)
-        ocr_interval = st.slider("OCR Capture Interval (seconds)", 1, 10, 1,
-                                help="Capture OCR data every N seconds")
+        st.markdown("**OCR Engine Selection**")
+        
+        # Check available engines
+        available_engines = []
+        if OCR_ENGINES_AVAILABLE:
+            available_engines.extend(["TrOCR (Transformer)", "PaddleOCR 2.7.x", "Tesseract OCR"])
+        if EASYOCR_AVAILABLE:
+            available_engines.append("EasyOCR (Legacy)")
+        
+        if not available_engines:
+            st.error("No OCR engines available!")
+            st.info("Install with: pip install -r requirements_ocr_comparison.txt")
+            enable_ocr = False
+        else:
+            ocr_engine_choice = st.selectbox(
+                "Choose OCR Engine",
+                options=available_engines,
+                help="Select which OCR engine to use"
+            )
+            
+            # Engine-specific options
+            if ocr_engine_choice == "PaddleOCR 2.7.x":
+                use_gpu_paddle = st.checkbox("Use GPU (PaddleOCR)", value=True)
+            elif ocr_engine_choice == "Tesseract OCR":
+                digits_only = st.checkbox("Digits Only", value=False, 
+                                         help="Restrict to numbers (0-9)")
+            elif ocr_engine_choice == "TrOCR (Transformer)":
+                st.info("TrOCR uses GPU automatically if available")
+            
+            ocr_confidence_threshold = st.slider("OCR Confidence Threshold", 0.5, 1.0, 0.7, 0.05)
+            ocr_interval = st.slider("OCR Capture Interval (seconds)", 1, 10, 1,
+                                    help="Capture OCR data every N seconds")
     
     st.divider()
     st.subheader("💾 Video Recording")
@@ -200,33 +245,118 @@ def enhance_frame(frame, status, strength=1.1):
     else:
         return frame, False
 
-def perform_ocr(frame, ocr_engine, confidence_threshold=0.7):
-    """Perform OCR on frame using EasyOCR"""
-    results = ocr_engine.readtext(frame)
+def perform_ocr(frame, ocr_engine, ocr_engine_type='easyocr', confidence_threshold=0.7):
+    """
+    Perform OCR on frame using selected engine
     
+    Args:
+        frame: Input frame
+        ocr_engine: OCR engine instance
+        ocr_engine_type: Type of engine ('easyocr', 'trocr', 'paddleocr', 'tesseract')
+        confidence_threshold: Minimum confidence to display
+    """
     ocr_frame = frame.copy()
     text_results = []
     
-    for bbox, text, confidence in results:
-        if confidence >= confidence_threshold:
-            points = np.array(bbox, dtype=np.int32)
-            cv2.polylines(ocr_frame, [points], True, (0, 255, 0), 2)
-            text_pos = (int(points[0][0]), int(points[0][1]) - 10)
-            cv2.putText(ocr_frame, f"{text} ({confidence:.2f})", 
-                       text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            text_results.append({'text': text, 'confidence': confidence})
+    try:
+        if ocr_engine_type == 'easyocr':
+            # EasyOCR format
+            results = ocr_engine.readtext(frame)
+            for bbox, text, confidence in results:
+                if confidence >= confidence_threshold:
+                    points = np.array(bbox, dtype=np.int32)
+                    cv2.polylines(ocr_frame, [points], True, (0, 255, 0), 2)
+                    text_pos = (int(points[0][0]), int(points[0][1]) - 10)
+                    cv2.putText(ocr_frame, f"{text} ({confidence:.2f})", 
+                               text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    text_results.append({'text': text, 'confidence': confidence})
+        
+        elif ocr_engine_type in ['trocr', 'paddleocr', 'tesseract']:
+            # Use modular OCR engine
+            result = ocr_engine.extract_text(frame)
+            
+            if result['success'] and result['text']:
+                # Draw bounding boxes if available
+                if result['boxes']:
+                    for box in result['boxes']:
+                        points = np.array(box, dtype=np.int32)
+                        cv2.polylines(ocr_frame, [points], True, (0, 255, 0), 2)
+                
+                # Add text overlay
+                if result.get('details'):
+                    # Multiple text regions
+                    for text, conf in result['details']:
+                        if conf >= confidence_threshold:
+                            text_results.append({'text': text, 'confidence': conf})
+                else:
+                    # Single text result
+                    if result['confidence'] >= confidence_threshold:
+                        text_results.append({
+                            'text': result['text'], 
+                            'confidence': result['confidence']
+                        })
+                
+                # Display text on frame
+                y_pos = 30
+                for item in text_results:
+                    cv2.putText(ocr_frame, f"{item['text']} ({item['confidence']:.2f})",
+                               (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    y_pos += 30
+    
+    except Exception as e:
+        print(f"OCR error: {e}")
     
     return ocr_frame, text_results
 
+
+@st.cache_resource
+def initialize_ocr_engine(engine_type, **kwargs):
+    """Initialize and cache OCR engine"""
+    try:
+        if engine_type == "TrOCR (Transformer)":
+            engine = TrOCREngine()
+            if engine.initialize():
+                return engine, 'trocr'
+        
+        elif engine_type == "PaddleOCR 2.7.x":
+            use_gpu = kwargs.get('use_gpu', True)
+            engine = PaddleOCREngine(use_gpu=use_gpu)
+            if engine.initialize():
+                return engine, 'paddleocr'
+        
+        elif engine_type == "Tesseract OCR":
+            digits_only = kwargs.get('digits_only', False)
+            engine = TesseractEngine(digits_only=digits_only)
+            if engine.initialize():
+                return engine, 'tesseract'
+        
+        elif engine_type == "EasyOCR (Legacy)":
+            import easyocr
+            engine = easyocr.Reader(['en'], gpu=True)
+            return engine, 'easyocr'
+    
+    except Exception as e:
+        print(f"Failed to initialize {engine_type}: {e}")
+    
+    return None, None
+
+
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
                         update_interval=5, enable_enhance=False, enhance_strength=1.1,
-                        enable_ocr=False, ocr_confidence=0.7, ocr_interval=1, 
-                        save_video=False, output_filename="processed_output.mp4"):
+                        enable_ocr=False, ocr_engine_choice="EasyOCR (Legacy)", 
+                        ocr_confidence=0.7, ocr_interval=1, 
+                        save_video=False, output_filename="processed_output.mp4", **ocr_kwargs):
     """Process video with optimized performance"""
     # Initialize OCR if enabled
     ocr_engine = None
+    ocr_engine_type = None
+    
     if enable_ocr:
-        ocr_engine = easyocr.Reader(['en'], gpu=True)
+        ocr_engine, ocr_engine_type = initialize_ocr_engine(ocr_engine_choice, **ocr_kwargs)
+        
+        if ocr_engine is None:
+            st.error(f"Failed to initialize {ocr_engine_choice}")
+            enable_ocr = False
     
     gpu_info = {}
     try:
@@ -353,7 +483,7 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                 should_capture_ocr = True
                 last_ocr_time = current_time
             
-            ocr_result, text_results = perform_ocr(enhanced_result, ocr_engine, ocr_confidence)
+            ocr_result, text_results = perform_ocr(enhanced_result, ocr_engine, ocr_engine_type, ocr_confidence)
             total_text_detected += len(text_results)
             
             # Log OCR data if it's time to capture
@@ -440,14 +570,27 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
 # Process video when button is clicked
 if process_button:
     st.session_state.processing = True
+    # Prepare OCR kwargs
+    ocr_kwargs = {}
+    if enable_ocr:
+        if ocr_engine_choice == "PaddleOCR 2.7.x":
+            ocr_kwargs['use_gpu'] = use_gpu_paddle if 'use_gpu_paddle' in locals() else True
+        elif ocr_engine_choice == "Tesseract OCR":
+            ocr_kwargs['digits_only'] = digits_only if 'digits_only' in locals() else False
     
-    for data in process_video_stream(selected_video, skip_frames, enable_blur_detection, 
-                                      blur_threshold if enable_blur_detection else 100.0,
-                                      update_interval, enable_enhancement,
-                                      enhancement_strength if enable_enhancement else 1.1,
-                                      enable_ocr, ocr_confidence_threshold if enable_ocr else 0.7,
-                                      ocr_interval if enable_ocr else 1,
-                                      save_video, output_filename if save_video else "processed_output.mp4"):
+    for data in process_video_stream(
+        selected_video, skip_frames, enable_blur_detection, 
+        blur_threshold if enable_blur_detection else 100.0,
+        update_interval, enable_enhancement,
+        enhancement_strength if enable_enhancement else 1.1,
+        enable_ocr, 
+        ocr_engine_choice if enable_ocr else "EasyOCR (Legacy)",
+        ocr_confidence_threshold if enable_ocr else 0.7,
+        ocr_interval if enable_ocr else 1,
+        save_video, 
+        output_filename if save_video else "processed_output.mp4",
+        **ocr_kwargs
+    ):
         if stop_button or not st.session_state.get('processing', False):
             st.warning("Processing stopped by user")
             break
