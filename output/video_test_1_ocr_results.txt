@@ -1,0 +1,33 @@
+OCR Results for: video/video_test_1.mp4
+Timestamp: 2026-04-12 22:14:05
+================================================================================
+
+Frame 1 - Text detected: 4
+  1. 'Ho;' (confidence: 0.60)
+  2. 'car; 0.30' (confidence: 0.55)
+  3. 'Person: 0.63' (confidence: 0.57)
+  4. 'rson' (confidence: 0.50)
+
+Frame 2 - Text detected: 4
+  1. 'Ho;' (confidence: 0.60)
+  2. 'car; 0.30' (confidence: 0.55)
+  3. 'Person: 0.63' (confidence: 0.57)
+  4. 'rgon' (confidence: 0.85)
+
+Frame 3 - Text detected: 4
+  1. 'Ho;' (confidence: 0.71)
+  2. 'car; 0.36' (confidence: 0.60)
+  3. 'person: 0.69]' (confidence: 0.73)
+  4. 'rson' (confidence: 0.50)
+
+Frame 4 - Text detected: 4
+  1. 'HO;' (confidence: 0.16)
+  2. 'car: 0.38' (confidence: 0.43)
+  3. 'person: 0.73]' (confidence: 0.44)
+  4. '~erson' (confidence: 0.23)
+
+Frame 5 - Text detected: 3
+  1. 'HOS' (confidence: 0.09)
+  2. 'perbon: 0.66' (confidence: 0.40)
+  3. '~erson' (confidence: 0.17)
+

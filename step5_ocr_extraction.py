@@ -24,20 +24,66 @@ def enhance_frame(frame, status, strength=1.1):
     else:
         return frame, False
 
-def perform_ocr(frame, ocr_engine):
+def preprocess_for_ocr(frame):
     """
-    Perform OCR on frame using EasyOCR.
+    Enhanced preprocessing for better OCR accuracy.
+    
+    Args:
+        frame: Input frame (BGR)
+        
+    Returns:
+        preprocessed: Preprocessed frame optimized for OCR
+    """
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Apply bilateral filter to reduce noise while preserving edges
+    denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+    
+    # Apply adaptive thresholding for better text contrast
+    thresh = cv2.adaptiveThreshold(
+        denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 11, 2
+    )
+    
+    # Apply morphological operations to clean up
+    kernel = np.ones((2, 2), np.uint8)
+    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
+    # Convert back to BGR for EasyOCR
+    preprocessed = cv2.cvtColor(morph, cv2.COLOR_GRAY2BGR)
+    
+    return preprocessed
+
+def perform_ocr(frame, ocr_engine, use_preprocessing=True):
+    """
+    Perform OCR on frame using EasyOCR with enhanced preprocessing.
     
     Args:
         frame: Input frame (BGR)
         ocr_engine: EasyOCR Reader instance
+        use_preprocessing: Whether to apply preprocessing for better accuracy
         
     Returns:
         ocr_frame: Frame with OCR results drawn
         text_results: List of detected text with confidence
     """
-    # Perform OCR
-    results = ocr_engine.readtext(frame)
+    # Apply preprocessing for better OCR accuracy
+    if use_preprocessing:
+        processed_frame = preprocess_for_ocr(frame)
+        # Run OCR on both original and preprocessed, combine results
+        results_original = ocr_engine.readtext(frame)
+        results_processed = ocr_engine.readtext(processed_frame)
+        
+        # Combine and deduplicate results (keep higher confidence)
+        combined_results = {}
+        for bbox, text, confidence in results_original + results_processed:
+            if text not in combined_results or confidence > combined_results[text][1]:
+                combined_results[text] = (bbox, confidence)
+        
+        results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
+    else:
+        results = ocr_engine.readtext(frame)
     
     # Create output frame
     ocr_frame = frame.copy()
@@ -47,13 +93,27 @@ def perform_ocr(frame, ocr_engine):
         # Convert bbox to integer coordinates
         points = np.array(bbox, dtype=np.int32)
         
-        # Draw bounding box
+        # Draw bounding box in green
         cv2.polylines(ocr_frame, [points], True, (0, 255, 0), 2)
         
-        # Draw text above bounding box
+        # Prepare text with confidence (2 decimal places)
+        label = f"{text} ({confidence:.2f})"
+        
+        # Calculate text size for background
         text_pos = (int(points[0][0]), int(points[0][1]) - 10)
-        cv2.putText(ocr_frame, f"{text} ({confidence:.2f})", 
-                   text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        (text_width, text_height), baseline = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
+        )
+        
+        # Draw background rectangle for better visibility
+        cv2.rectangle(ocr_frame,
+                     (text_pos[0], text_pos[1] - text_height - 5),
+                     (text_pos[0] + text_width, text_pos[1] + 5),
+                     (0, 255, 0), -1)
+        
+        # Draw text in black for contrast
+        cv2.putText(ocr_frame, label, text_pos, 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
         
         # Store result
         text_results.append({
@@ -64,8 +124,14 @@ def perform_ocr(frame, ocr_engine):
     
     return ocr_frame, text_results
 
-def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True):
+def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True, save_output=True):
     """Process video with full pipeline including OCR"""
+    
+    # Create output directory
+    output_dir = "output"
+    if save_output and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created output directory: {output_dir}")
     
     # Initialize EasyOCR
     print(f"Initializing EasyOCR (GPU: {use_gpu})...")
@@ -97,50 +163,83 @@ def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True):
     frame_count = 0
     total_text_detected = 0
     start_time = time.time()
+    paused = False
+    
+    # Prepare output file for OCR results
+    ocr_output_file = None
+    if save_output:
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        ocr_output_file = os.path.join(output_dir, f"{video_name}_ocr_results.txt")
+        with open(ocr_output_file, 'w', encoding='utf-8') as f:
+            f.write(f"OCR Results for: {video_path}\n")
+            f.write(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("="*80 + "\n\n")
     
     while True:
-        ret, frame = cap.read()
+        if not paused:
+            ret, frame = cap.read()
+            
+            if not ret:
+                break
+            
+            frame_count += 1
+            
+            # Step 2: Detect blur
+            blur_score, blur_status = detect_blur(frame, blur_threshold)
+            
+            # Step 3: Conditional enhancement
+            enhanced_frame, was_enhanced = enhance_frame(frame, blur_status)
+            
+            # Step 5: OCR extraction with enhanced preprocessing
+            ocr_frame, text_results = perform_ocr(enhanced_frame, ocr, use_preprocessing=True)
+            total_text_detected += len(text_results)
+            
+            # Add info overlay
+            cv2.putText(ocr_frame, f"Frame: {frame_count}/{total_frames}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(ocr_frame, f"Blur: {blur_score:.1f} ({blur_status})", 
+                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(ocr_frame, f"Enhanced: {'Yes' if was_enhanced else 'No'}", 
+                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(ocr_frame, f"Text Detected: {len(text_results)}", 
+                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Save OCR results to file
+            if text_results and save_output:
+                with open(ocr_output_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Frame {frame_count} - Detected text:\n")
+                    for i, result in enumerate(text_results, 1):
+                        f.write(f"  {i}. '{result['text']}' (confidence: {result['confidence']:.2f})\n")
+                    f.write("\n")
+            
+            # Display detected text in console
+            if text_results:
+                print(f"\nFrame {frame_count} - Detected text:")
+                for i, result in enumerate(text_results, 1):
+                    print(f"  {i}. '{result['text']}' (confidence: {result['confidence']:.2f})")
+            
+            # Store current frame for pause display
+            current_display_frame = ocr_frame.copy()
         
-        if not ret:
-            break
-        
-        frame_count += 1
-        
-        # Step 2: Detect blur
-        blur_score, blur_status = detect_blur(frame, blur_threshold)
-        
-        # Step 3: Conditional enhancement
-        enhanced_frame, was_enhanced = enhance_frame(frame, blur_status)
-        
-        # Step 5: OCR extraction
-        ocr_frame, text_results = perform_ocr(enhanced_frame, ocr)
-        total_text_detected += len(text_results)
-        
-        # Add info overlay
-        cv2.putText(ocr_frame, f"Frame: {frame_count}/{total_frames}", 
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(ocr_frame, f"Blur: {blur_score:.1f} ({blur_status})", 
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(ocr_frame, f"Enhanced: {'Yes' if was_enhanced else 'No'}", 
-                    (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(ocr_frame, f"Text Detected: {len(text_results)}", 
-                    (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Display detected text in console
-        if text_results:
-            print(f"\nFrame {frame_count} - Detected text:")
-            for i, result in enumerate(text_results, 1):
-                print(f"  {i}. '{result['text']}' (confidence: {result['confidence']:.2f})")
+        # Add pause indicator if paused
+        if paused:
+            cv2.putText(current_display_frame, "PAUSED - Press 'r' to resume", 
+                       (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         
         # Display
-        cv2.imshow('Step 5: OCR Text Extraction', ocr_frame)
+        cv2.imshow('Step 5: OCR Text Extraction', current_display_frame)
         
-        # Control (q to quit, p to pause)
+        # Enhanced controls: p=pause, r=resume, q=quit
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('p'):
-            cv2.waitKey(-1)
+            paused = True
+            print("Video paused. Press 'r' to resume.")
+        elif key == ord('r'):
+            if paused:
+                paused = False
+                print("Video resumed.")
     
     # Summary
     total_time = time.time() - start_time
@@ -153,6 +252,19 @@ def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True):
     print(f"  Average text per frame: {avg_text_per_frame:.2f}")
     print(f"  Processing time: {total_time:.2f}s")
     print(f"  Average FPS: {avg_fps:.2f}")
+    
+    if save_output and ocr_output_file:
+        # Write summary to output file
+        with open(ocr_output_file, 'a', encoding='utf-8') as f:
+            f.write("="*80 + "\n")
+            f.write("SUMMARY\n")
+            f.write("="*80 + "\n")
+            f.write(f"Total frames processed: {frame_count}\n")
+            f.write(f"Total text instances detected: {total_text_detected}\n")
+            f.write(f"Average text per frame: {avg_text_per_frame:.2f}\n")
+            f.write(f"Processing time: {total_time:.2f}s\n")
+            f.write(f"Average FPS: {avg_fps:.2f}\n")
+        print(f"\n  OCR results saved to: {ocr_output_file}")
     
     cap.release()
     cv2.destroyAllWindows()
@@ -167,8 +279,12 @@ if __name__ == "__main__":
             print(f"Using default video: {default_video}")
             video_path = default_video
         else:
-            print("Usage: python step5_ocr_extraction.py <video_file_path> [blur_threshold] [use_gpu]")
-            print("Example: python step5_ocr_extraction.py video.mp4 100 True")
+            print("Usage: python step5_ocr_extraction.py <video_file_path> [blur_threshold] [use_gpu] [save_output]")
+            print("Example: python step5_ocr_extraction.py video.mp4 100 True True")
+            print("\nControls:")
+            print("  'p' - Pause video")
+            print("  'r' - Resume video")
+            print("  'q' - Quit")
             sys.exit(1)
     else:
         video_path = sys.argv[1]
@@ -176,5 +292,6 @@ if __name__ == "__main__":
     # Optional parameters
     blur_threshold = float(sys.argv[2]) if len(sys.argv) > 2 else 100.0
     use_gpu = sys.argv[3].lower() == 'true' if len(sys.argv) > 3 else True
+    save_output = sys.argv[4].lower() == 'true' if len(sys.argv) > 4 else True
     
-    process_video_with_ocr(video_path, blur_threshold, use_gpu)
+    process_video_with_ocr(video_path, blur_threshold, use_gpu, save_output)

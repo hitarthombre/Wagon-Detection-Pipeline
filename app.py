@@ -121,6 +121,13 @@ with st.sidebar:
         ocr_confidence_threshold = st.slider("OCR Confidence Threshold", 0.5, 1.0, 0.7, 0.05)
         ocr_interval = st.slider("OCR Capture Interval (seconds)", 1, 10, 1,
                                 help="Capture OCR data every N seconds")
+    
+    st.divider()
+    st.subheader("💾 Video Recording")
+    save_video = st.checkbox("Save Processed Video", value=False,
+                            help="Save all 4 stages as video file")
+    if save_video:
+        output_filename = st.text_input("Output Filename", "processed_output.mp4")
 
 # Main content area - compact layout
 col1, col2, col3, col4 = st.columns([3, 3, 3, 3], gap="small")
@@ -213,7 +220,8 @@ def perform_ocr(frame, ocr_engine, confidence_threshold=0.7):
 
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
                         update_interval=5, enable_enhance=False, enhance_strength=1.1,
-                        enable_ocr=False, ocr_confidence=0.7, ocr_interval=1):
+                        enable_ocr=False, ocr_confidence=0.7, ocr_interval=1, 
+                        save_video=False, output_filename="processed_output.mp4"):
     """Process video with optimized performance"""
     # Initialize OCR if enabled
     ocr_engine = None
@@ -250,6 +258,16 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    # Initialize video writer if saving
+    video_writer = None
+    if save_video:
+        # Create 2x2 grid size (each frame will be resized to fit)
+        grid_width = 1280
+        grid_height = 960
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_writer = cv2.VideoWriter(output_filename, fourcc, fps, (grid_width, grid_height))
+        st.info(f"📹 Recording to: {output_filename} ({grid_width}x{grid_height})")
     
     frame_count = 0
     blurry_count = 0
@@ -359,6 +377,37 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         display_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         
+        # Save to video if enabled
+        if video_writer is not None:
+            # Create grid for video output
+            frame_size = (640, 480)
+            
+            # Resize all frames
+            orig_resized = cv2.resize(frame, frame_size)
+            blur_resized = cv2.resize(cv2.cvtColor(blur_frame, cv2.COLOR_RGB2BGR) if blur_frame is not None else frame, frame_size)
+            enhance_resized = cv2.resize(cv2.cvtColor(enhanced_frame, cv2.COLOR_RGB2BGR) if enhanced_frame is not None else frame, frame_size)
+            ocr_resized = cv2.resize(cv2.cvtColor(ocr_frame, cv2.COLOR_RGB2BGR) if ocr_frame is not None else frame, frame_size)
+            
+            # Add labels
+            def add_label(img, text):
+                labeled = img.copy()
+                cv2.rectangle(labeled, (0, 0), (640, 40), (0, 0, 0), -1)
+                cv2.putText(labeled, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                return labeled
+            
+            orig_labeled = add_label(orig_resized, "Step 1: Original")
+            blur_labeled = add_label(blur_resized, "Step 2: Blur Detection")
+            enhance_labeled = add_label(enhance_resized, "Step 3: Enhanced")
+            ocr_labeled = add_label(ocr_resized, "Step 4: OCR")
+            
+            # Create 2x2 grid
+            top_row = np.hstack([orig_labeled, blur_labeled])
+            bottom_row = np.hstack([enhance_labeled, ocr_labeled])
+            grid = np.vstack([top_row, bottom_row])
+            
+            # Write frame
+            video_writer.write(grid)
+        
         yield {
             'frame': display_frame,
             'blur_frame': blur_frame,
@@ -383,6 +432,9 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
             'ocr_data_log': ocr_data_log
         }
     
+    # Cleanup
+    if video_writer is not None:
+        video_writer.release()
     cap.release()
 
 # Process video when button is clicked
@@ -394,7 +446,8 @@ if process_button:
                                       update_interval, enable_enhancement,
                                       enhancement_strength if enable_enhancement else 1.1,
                                       enable_ocr, ocr_confidence_threshold if enable_ocr else 0.7,
-                                      ocr_interval if enable_ocr else 1):
+                                      ocr_interval if enable_ocr else 1,
+                                      save_video, output_filename if save_video else "processed_output.mp4"):
         if stop_button or not st.session_state.get('processing', False):
             st.warning("Processing stopped by user")
             break
@@ -439,6 +492,10 @@ if process_button:
     
     st.session_state.processing = False
     st.success("✅ Video processing complete!")
+    
+    if save_video:
+        st.success(f"💾 Video saved to: {output_filename if save_video else 'processed_output.mp4'}")
+        st.info("You can download the file from your project directory")
 
 if 'processing' not in st.session_state:
     st.session_state.processing = False
