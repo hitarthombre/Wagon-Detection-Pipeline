@@ -4,5 +4,5 @@ numpy>=1.24.0
 ultralytics>=8.0.0
 
 # OCR Engines (choose one or both)
-easyocr>=1.7.0
-# paddleocr>=2.7.0  # Uncomment for PaddleOCR (faster, often more accurate)
+easyocr>=1.7.0  # Recommended - stable and reliable
+# paddleocr>=2.7.0  # Optional - faster but may have compatibility issues with some systems
