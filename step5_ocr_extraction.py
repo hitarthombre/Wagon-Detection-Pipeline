@@ -83,17 +83,16 @@ def perform_ocr(frame, ocr_engine, use_preprocessing=True, ocr_type='easyocr'):
         processed_frame = preprocess_for_ocr(frame)
         
         if ocr_type == 'paddleocr':
-            # PaddleOCR 3.0+ format
-            results_original = ocr_engine.predict(frame)
-            results_processed = ocr_engine.predict(processed_frame)
+            # PaddleOCR classic API format
+            results_original = ocr_engine.ocr(frame)
+            results_processed = ocr_engine.ocr(processed_frame)
             
             # Combine and deduplicate
             combined_results = {}
             for result_set in [results_original, results_processed]:
-                if result_set and result_set.get('rec_text'):
-                    for i, text in enumerate(result_set['rec_text']):
-                        confidence = result_set['rec_score'][i] if 'rec_score' in result_set else 0.9
-                        bbox = result_set['dt_polys'][i] if 'dt_polys' in result_set else [[0,0],[0,0],[0,0],[0,0]]
+                if result_set and result_set[0]:
+                    for line in result_set[0]:
+                        bbox, (text, confidence) = line
                         if text not in combined_results or confidence > combined_results[text][1]:
                             combined_results[text] = (bbox, confidence)
             
@@ -112,12 +111,11 @@ def perform_ocr(frame, ocr_engine, use_preprocessing=True, ocr_type='easyocr'):
             results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
     else:
         if ocr_type == 'paddleocr':
-            result = ocr_engine.predict(frame)
+            result = ocr_engine.ocr(frame)
             results = []
-            if result and result.get('rec_text'):
-                for i, text in enumerate(result['rec_text']):
-                    confidence = result['rec_score'][i] if 'rec_score' in result else 0.9
-                    bbox = result['dt_polys'][i] if 'dt_polys' in result else [[0,0],[0,0],[0,0],[0,0]]
+            if result and result[0]:
+                for line in result[0]:
+                    bbox, (text, confidence) = line
                     results.append((bbox, text, confidence))
         else:
             results = ocr_engine.readtext(frame)

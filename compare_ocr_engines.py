@@ -53,10 +53,10 @@ def test_ocr_engine(video_path, engine_name, ocr_engine, num_frames=10):
         start_time = time.time()
         
         if engine_name == "PaddleOCR":
-            result = ocr_engine.predict(frame)
+            result = ocr_engine.ocr(frame)
             text_count = 0
-            if result and result.get('rec_text'):
-                text_count = len(result['rec_text'])
+            if result and result[0]:
+                text_count = len(result[0])
         else:  # EasyOCR
             result = ocr_engine.readtext(frame)
             text_count = len(result)

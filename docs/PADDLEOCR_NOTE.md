@@ -1,8 +1,51 @@
 # PaddleOCR Compatibility Note
 
-## Current Status
+## Current Status: PaddleOCR Disabled
 
-PaddleOCR 3.0+ has been integrated into the pipeline, but there are known compatibility issues with certain system configurations.
+PaddleOCR 3.0+ has **critical compatibility issues** on Windows systems with certain configurations.
+
+### The Problem
+
+PaddleOCR 3.0 fails with:
+```
+NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
+```
+
+This is a **PaddleOCR library bug**, not an issue with our integration code. The error occurs deep in PaddleOCR's inference engine (oneDNN/MKL-DNN layer).
+
+### Root Cause
+
+- PaddleOCR 3.0 uses PaddleX backend
+- PaddleX has compatibility issues with oneDNN on Windows
+- Both `.ocr()` and `.predict()` methods fail
+- This affects ALL PaddleOCR 3.0 users on affected systems
+
+### Recommendation
+
+**Use EasyOCR** - It's stable, reliable, and works perfectly.
+
+```bash
+# Already installed and working
+python step5_ocr_extraction.py video/video_test_1.mp4
+```
+
+### If You Really Need PaddleOCR
+
+Try **PaddleOCR 2.x** (older version):
+```bash
+pip uninstall paddleocr
+pip install paddleocr==2.7.0.3
+```
+
+However, we recommend sticking with **EasyOCR** for stability.
+
+## Summary
+
+- ❌ **PaddleOCR 3.0+** - Broken on many Windows systems
+- ✅ **EasyOCR** - Works perfectly, recommended
+- ⚠️ **PaddleOCR 2.x** - May work, but outdated
+
+**Bottom line:** EasyOCR is the best choice for this project.
 
 ## Known Issues
 
