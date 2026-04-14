@@ -201,14 +201,52 @@ def enhance_frame(frame, status, strength=1.1):
     else:
         return frame, False
 
-def perform_ocr(frame, ocr_engine, confidence_threshold=0.7):
-    """Perform OCR on frame using EasyOCR"""
+def preprocess_for_ocr(frame):
+    """Enhanced preprocessing for better OCR accuracy"""
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Apply bilateral filter to reduce noise while preserving edges
+    denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+    
+    # Apply adaptive thresholding for better text contrast
+    thresh = cv2.adaptiveThreshold(
+        denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 11, 2
+    )
+    
+    # Apply morphological operations to clean up
+    kernel = np.ones((2, 2), np.uint8)
+    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
+    # Convert back to BGR for EasyOCR
+    preprocessed = cv2.cvtColor(morph, cv2.COLOR_GRAY2BGR)
+    
+    return preprocessed
+
+def perform_ocr(frame, ocr_engine, confidence_threshold=0.7, use_preprocessing=True):
+    """Perform OCR on frame using EasyOCR with enhanced preprocessing"""
     ocr_frame = frame.copy()
     text_results = []
     
     try:
-        # Use EasyOCR
-        results = ocr_engine.readtext(frame)
+        # Apply preprocessing for better OCR accuracy
+        if use_preprocessing:
+            processed_frame = preprocess_for_ocr(frame)
+            
+            # Run OCR on both original and preprocessed, combine results
+            results_original = ocr_engine.readtext(frame)
+            results_processed = ocr_engine.readtext(processed_frame)
+            
+            # Combine and deduplicate results (keep higher confidence)
+            combined_results = {}
+            for bbox, text, confidence in results_original + results_processed:
+                if text not in combined_results or confidence > combined_results[text][1]:
+                    combined_results[text] = (bbox, confidence)
+            
+            results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
+        else:
+            results = ocr_engine.readtext(frame)
         
         for (bbox, text, confidence) in results:
             if confidence >= confidence_threshold:
@@ -216,18 +254,32 @@ def perform_ocr(frame, ocr_engine, confidence_threshold=0.7):
                 pts = np.array(bbox, dtype=np.int32)
                 cv2.polylines(ocr_frame, [pts], True, (0, 255, 0), 2)
                 
+                # Prepare text with confidence
+                label = f"{text} ({confidence:.2f})"
+                
+                # Calculate text size for background
+                text_pos = (int(pts[0][0]), int(pts[0][1]) - 10)
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
+                )
+                
+                # Draw background rectangle for better visibility
+                cv2.rectangle(
+                    ocr_frame,
+                    (text_pos[0], text_pos[1] - text_height - 5),
+                    (text_pos[0] + text_width, text_pos[1] + 5),
+                    (0, 255, 0), -1
+                )
+                
+                # Draw text in black for contrast
+                cv2.putText(ocr_frame, label, text_pos, 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                
                 # Add text result
                 text_results.append({
                     'text': text, 
                     'confidence': confidence
                 })
-        
-        # Display text on frame
-        y_pos = 30
-        for item in text_results:
-            cv2.putText(ocr_frame, f"{item['text']} ({item['confidence']:.2f})",
-                       (10, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            y_pos += 30
     
     except Exception as e:
         print(f"OCR error: {e}")

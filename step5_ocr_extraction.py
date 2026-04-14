@@ -2,17 +2,7 @@ import cv2
 import numpy as np
 import time
 import os
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-except ImportError:
-    EASYOCR_AVAILABLE = False
-
-try:
-    from paddleocr import PaddleOCR
-    PADDLEOCR_AVAILABLE = True
-except ImportError:
-    PADDLEOCR_AVAILABLE = False
+import easyocr
 
 def detect_blur(frame, threshold=100.0):
     """Detect blur using Laplacian variance method"""
@@ -35,12 +25,11 @@ def enhance_frame(frame, status, strength=1.1):
         return frame, False
 
 def preprocess_for_ocr(frame):
-    """
-    Enhanced preprocessing for better OCR accuracy.
+    """Enhanced preprocessing for better OCR accuracy.
     
     Args:
         frame: Input frame (BGR)
-        
+    
     Returns:
         preprocessed: Preprocessed frame optimized for OCR
     """
@@ -65,15 +54,14 @@ def preprocess_for_ocr(frame):
     
     return preprocessed
 
-def perform_ocr(frame, ocr_engine, use_preprocessing=True, ocr_type='easyocr'):
-    """
-    Perform OCR on frame using EasyOCR with enhanced preprocessing.
+def perform_ocr(frame, ocr_engine, use_preprocessing=True):
+    """Perform OCR on frame using EasyOCR with enhanced preprocessing.
     
     Args:
         frame: Input frame (BGR)
         ocr_engine: EasyOCR Reader instance
         use_preprocessing: Whether to apply preprocessing for better accuracy
-        
+    
     Returns:
         ocr_frame: Frame with OCR results drawn
         text_results: List of detected text with confidence
@@ -82,43 +70,19 @@ def perform_ocr(frame, ocr_engine, use_preprocessing=True, ocr_type='easyocr'):
     if use_preprocessing:
         processed_frame = preprocess_for_ocr(frame)
         
-        if ocr_type == 'paddleocr':
-            # PaddleOCR classic API format
-            results_original = ocr_engine.ocr(frame)
-            results_processed = ocr_engine.ocr(processed_frame)
-            
-            # Combine and deduplicate
-            combined_results = {}
-            for result_set in [results_original, results_processed]:
-                if result_set and result_set[0]:
-                    for line in result_set[0]:
-                        bbox, (text, confidence) = line
-                        if text not in combined_results or confidence > combined_results[text][1]:
-                            combined_results[text] = (bbox, confidence)
-            
-            results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
-        else:
-            # EasyOCR format
-            results_original = ocr_engine.readtext(frame)
-            results_processed = ocr_engine.readtext(processed_frame)
-            
-            # Combine and deduplicate
-            combined_results = {}
-            for bbox, text, confidence in results_original + results_processed:
-                if text not in combined_results or confidence > combined_results[text][1]:
-                    combined_results[text] = (bbox, confidence)
-            
-            results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
+        # Run OCR on both original and preprocessed, combine results
+        results_original = ocr_engine.readtext(frame)
+        results_processed = ocr_engine.readtext(processed_frame)
+        
+        # Combine and deduplicate results (keep higher confidence)
+        combined_results = {}
+        for bbox, text, confidence in results_original + results_processed:
+            if text not in combined_results or confidence > combined_results[text][1]:
+                combined_results[text] = (bbox, confidence)
+        
+        results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
     else:
-        if ocr_type == 'paddleocr':
-            result = ocr_engine.ocr(frame)
-            results = []
-            if result and result[0]:
-                for line in result[0]:
-                    bbox, (text, confidence) = line
-                    results.append((bbox, text, confidence))
-        else:
-            results = ocr_engine.readtext(frame)
+        results = ocr_engine.readtext(frame)
     
     # Create output frame
     ocr_frame = frame.copy()
@@ -141,10 +105,12 @@ def perform_ocr(frame, ocr_engine, use_preprocessing=True, ocr_type='easyocr'):
         )
         
         # Draw background rectangle for better visibility
-        cv2.rectangle(ocr_frame,
-                     (text_pos[0], text_pos[1] - text_height - 5),
-                     (text_pos[0] + text_width, text_pos[1] + 5),
-                     (0, 255, 0), -1)
+        cv2.rectangle(
+            ocr_frame,
+            (text_pos[0], text_pos[1] - text_height - 5),
+            (text_pos[0] + text_width, text_pos[1] + 5),
+            (0, 255, 0), -1
+        )
         
         # Draw text in black for contrast
         cv2.putText(ocr_frame, label, text_pos, 
@@ -159,47 +125,18 @@ def perform_ocr(frame, ocr_engine, use_preprocessing=True, ocr_type='easyocr'):
     
     return ocr_frame, text_results
 
-def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True, save_output=True, ocr_engine='easyocr'):
-    """Process video with full pipeline including OCR
-    
-    Args:
-        video_path: Path to input video
-        blur_threshold: Threshold for blur detection
-        use_gpu: Use GPU acceleration
-        save_output: Save results to files
-        ocr_engine: 'easyocr' or 'paddleocr'
-    """
-    
+def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True, save_output=True):
+    """Process video with full pipeline including OCR"""
     # Create output directory
     output_dir = "output"
     if save_output and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
     
-    # Initialize OCR engine
-    if ocr_engine == 'paddleocr':
-        if not PADDLEOCR_AVAILABLE:
-            print("PaddleOCR not installed. Install with: pip install paddleocr")
-            print("Falling back to EasyOCR...")
-            ocr_engine = 'easyocr'
-        else:
-            print(f"Initializing PaddleOCR (GPU: {use_gpu})...")
-            try:
-                # PaddleOCR 3.0+ simplified API
-                ocr = PaddleOCR(lang='en')
-                print("PaddleOCR initialized successfully (v3.0+)")
-            except Exception as e:
-                print(f"Failed to initialize PaddleOCR: {e}")
-                print("Falling back to EasyOCR...")
-                ocr_engine = 'easyocr'
-    
-    if ocr_engine == 'easyocr':
-        if not EASYOCR_AVAILABLE:
-            print("EasyOCR not installed. Install with: pip install easyocr")
-            return
-        print(f"Initializing EasyOCR (GPU: {use_gpu})...")
-        ocr = easyocr.Reader(['en'], gpu=use_gpu)
-        print("EasyOCR initialized successfully")
+    # Initialize EasyOCR
+    print(f"Initializing EasyOCR (GPU: {use_gpu})...")
+    ocr = easyocr.Reader(['en'], gpu=use_gpu)
+    print("EasyOCR initialized successfully")
     
     # Enable GPU acceleration for OpenCV
     try:
@@ -209,7 +146,6 @@ def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True, save_
         print("OpenCL not available")
     
     cap = cv2.VideoCapture(video_path)
-    
     if not cap.isOpened():
         print(f"Error: Cannot open video {video_path}")
         return
@@ -241,7 +177,6 @@ def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True, save_
     while True:
         if not paused:
             ret, frame = cap.read()
-            
             if not ret:
                 break
             
@@ -254,18 +189,18 @@ def process_video_with_ocr(video_path, blur_threshold=100.0, use_gpu=True, save_
             enhanced_frame, was_enhanced = enhance_frame(frame, blur_status)
             
             # Step 5: OCR extraction with enhanced preprocessing
-            ocr_frame, text_results = perform_ocr(enhanced_frame, ocr, use_preprocessing=True, ocr_type=ocr_engine)
+            ocr_frame, text_results = perform_ocr(enhanced_frame, ocr, use_preprocessing=True)
             total_text_detected += len(text_results)
             
             # Add info overlay
             cv2.putText(ocr_frame, f"Frame: {frame_count}/{total_frames}", 
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             cv2.putText(ocr_frame, f"Blur: {blur_score:.1f} ({blur_status})", 
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(ocr_frame, f"Enhanced: {'Yes' if was_enhanced else 'No'}", 
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(ocr_frame, f"Text Detected: {len(text_results)}", 
-                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                       (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # Save OCR results to file
             if text_results and save_output:
@@ -342,12 +277,8 @@ if __name__ == "__main__":
             print(f"Using default video: {default_video}")
             video_path = default_video
         else:
-            print("Usage: python step5_ocr_extraction.py <video_file_path> [blur_threshold] [use_gpu] [save_output] [ocr_engine]")
-            print("Example: python step5_ocr_extraction.py video.mp4 100 True True easyocr")
-            print("         python step5_ocr_extraction.py video.mp4 100 True True paddleocr")
-            print("\nOCR Engines:")
-            print("  easyocr   - EasyOCR (default)")
-            print("  paddleocr - PaddleOCR (faster, often more accurate)")
+            print("Usage: python step5_ocr_extraction.py <video_file_path> [blur_threshold] [use_gpu] [save_output]")
+            print("Example: python step5_ocr_extraction.py video.mp4 100 True True")
             print("\nControls:")
             print("  'p' - Pause video")
             print("  'r' - Resume video")
@@ -360,10 +291,5 @@ if __name__ == "__main__":
     blur_threshold = float(sys.argv[2]) if len(sys.argv) > 2 else 100.0
     use_gpu = sys.argv[3].lower() == 'true' if len(sys.argv) > 3 else True
     save_output = sys.argv[4].lower() == 'true' if len(sys.argv) > 4 else True
-    ocr_engine = sys.argv[5].lower() if len(sys.argv) > 5 else 'easyocr'
     
-    if ocr_engine not in ['easyocr', 'paddleocr']:
-        print(f"Invalid OCR engine: {ocr_engine}. Using 'easyocr'")
-        ocr_engine = 'easyocr'
-    
-    process_video_with_ocr(video_path, blur_threshold, use_gpu, save_output, ocr_engine)
+    process_video_with_ocr(video_path, blur_threshold, use_gpu, save_output)
