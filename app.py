@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import easyocr
+from ocr_database import OCRDatabase
 
 st.set_page_config(page_title="AI Video Processing Pipeline", layout="wide")
 
@@ -80,23 +81,61 @@ st.markdown("""
 
 st.markdown('<h1 class="main-title">🎥 AI Video Processing Pipeline</h1>', unsafe_allow_html=True)
 
+# Initialize OCR Database
+@st.cache_resource
+def get_ocr_database():
+    return OCRDatabase()
+
+ocr_db = get_ocr_database()
+
 # Sidebar for controls
 with st.sidebar:
     st.header("⚙️ Controls")
-    video_files = list(Path("video").glob("*.mp4"))
     
-    if video_files:
-        selected_video = st.selectbox(
-            "Select Video",
-            video_files,
-            format_func=lambda x: x.name
-        )
-    else:
-        st.error("No video files found in 'video' folder")
-        st.stop()
+    # Tab for Process and Logs
+    tab1, tab2 = st.tabs(["▶️ Process", "📋 Logs"])
     
-    process_button = st.button("▶️ Process Video", type="primary", width="stretch")
-    stop_button = st.button("⏹️ Stop", width="stretch")
+    with tab1:
+        video_files = list(Path("video").glob("*.mp4"))
+        
+        if video_files:
+            selected_video = st.selectbox(
+                "Select Video",
+                video_files,
+                format_func=lambda x: x.name
+            )
+        else:
+            st.error("No video files found in 'video' folder")
+            st.stop()
+        
+        process_button = st.button("▶️ Process Video", type="primary", width="stretch")
+        stop_button = st.button("⏹️ Stop", width="stretch")
+    
+    with tab2:
+        st.subheader("📊 Previous Scans")
+        all_videos = ocr_db.get_all_videos()
+        
+        if all_videos:
+            st.metric("Total Scans", len(all_videos))
+            
+            for idx, video in enumerate(reversed(all_videos[-10:])):  # Show last 10
+                with st.expander(f"📹 {video['video_name']}", expanded=False):
+                    st.write(f"**Scan ID:** {video['video_id']}")
+                    st.write(f"**Date:** {video['timestamp'][:19]}")
+                    st.write(f"**Frames:** {video['total_frames_processed']}")
+                    st.write(f"**Text Detected:** {video['total_text_detected']}")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**With Numbers:** {len(video['text_with_numbers'])}")
+                    with col2:
+                        st.write(f"**Text Only:** {len(video['text_only'])}")
+                    
+                    if st.button(f"📄 Export Report", key=f"export_{idx}"):
+                        report_path = ocr_db.export_video_report(video['video_id'])
+                        st.success(f"Report saved: {report_path}")
+        else:
+            st.info("No previous scans found. Process a video to see logs here.")
     
     st.divider()
     st.subheader("⚡ Performance")
@@ -172,8 +211,22 @@ progress_bar = st.progress(0)
 # OCR Data Display Section
 if enable_ocr:
     st.divider()
-    st.markdown("### 📊 OCR Data (Captured Every Second)")
-    ocr_data_container = st.empty()
+    st.markdown("### 📊 OCR Results")
+    
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.markdown("#### 🔢 Text with Numbers")
+        text_with_numbers_container = st.empty()
+    
+    with col_right:
+        st.markdown("#### 📝 Text Only")
+        text_only_container = st.empty()
+    
+    st.divider()
+    st.markdown("### 🖼️ Frames with Detected Text")
+    frames_container = st.empty()
+
 
 def detect_blur(frame, threshold=100.0):
     """Detect blur using Laplacian variance method - GPU optimized"""
@@ -376,7 +429,7 @@ def initialize_ocr_engine():
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
                         update_interval=5, enable_enhance=False, enhance_strength=1.1,
                         enable_ocr=False, use_batch_ocr=False, batch_size=4, ocr_confidence=0.7, ocr_interval=1, 
-                        save_video=False, output_filename="processed_output.mp4"):
+                        save_video=False, output_filename="processed_output.mp4", ocr_db=None, video_id=None):
     """Process video with optimized performance and optional batch OCR"""
     # Initialize OCR if enabled
     ocr_engine = None
@@ -544,6 +597,10 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                                 'frame': frame_num,
                                 'texts': texts
                             })
+                            
+                            # Save to database with frame image
+                            if ocr_db and video_id:
+                                ocr_db.add_ocr_result(video_id, frame_num, enhanced_result, texts)
                         
                         # Only keep the last result for display
                         if idx == len(ocr_results) - 1:
@@ -569,6 +626,10 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                         'frame': frame_count,
                         'texts': text_results
                     })
+                    
+                    # Save to database with frame image
+                    if ocr_db and video_id:
+                        ocr_db.add_ocr_result(video_id, frame_count, enhanced_result, text_results)
             
             if 'ocr_result' in locals():
                 ocr_frame = ocr_result.copy()
@@ -650,6 +711,9 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
 if process_button:
     st.session_state.processing = True
     
+    # Create new video log entry
+    video_id = ocr_db.create_video_log(selected_video.name) if enable_ocr else None
+    
     for data in process_video_stream(
         selected_video, skip_frames, enable_blur_detection, 
         blur_threshold if enable_blur_detection else 100.0,
@@ -661,7 +725,9 @@ if process_button:
         ocr_confidence_threshold if enable_ocr else 0.7,
         ocr_interval if enable_ocr else 1,
         save_video, 
-        output_filename if save_video else "processed_output.mp4"
+        output_filename if save_video else "processed_output.mp4",
+        ocr_db if enable_ocr else None,
+        video_id if enable_ocr else None
     ):
         if stop_button or not st.session_state.get('processing', False):
             st.warning("Processing stopped by user")
@@ -692,26 +758,69 @@ if process_button:
         
         progress_bar.progress(data['frame_count'] / data['total_frames'])
         
-        # Display OCR data log
-        if enable_ocr and data['ocr_data_log']:
-            ocr_html = '<div class="ocr-data-box">'
-            for entry in reversed(data['ocr_data_log'][-10:]):  # Show last 10 entries
-                ocr_html += f'<div class="ocr-entry">'
-                ocr_html += f'<div class="ocr-timestamp">⏱️ {entry["timestamp"]}s (Frame {entry["frame"]})</div>'
-                for text_item in entry['texts']:
-                    ocr_html += f'<div class="ocr-text">📝 {text_item["text"]}</div>'
-                    ocr_html += f'<div class="ocr-confidence">Confidence: {text_item["confidence"]:.2%}</div>'
-                ocr_html += '</div>'
-            ocr_html += '</div>'
-            ocr_data_container.markdown(ocr_html, unsafe_allow_html=True)
+        # Display OCR results from database
+        if enable_ocr and video_id:
+            video_data = ocr_db.get_video_by_id(video_id)
+            if video_data:
+                # Text with numbers column
+                if video_data['text_with_numbers']:
+                    numbers_html = '<div style="max-height: 400px; overflow-y: auto;">'
+                    for item in video_data['text_with_numbers']:
+                        numbers_html += f'<div style="padding: 8px; margin: 4px 0; background: #2e3140; border-radius: 4px; border-left: 3px solid #10b981;">'
+                        numbers_html += f'<div style="color: #10b981; font-weight: 600;">{item["text"]}</div>'
+                        numbers_html += f'<div style="color: #a0a0a0; font-size: 0.85em;">Confidence: {item["confidence"]:.2%} | Frame: {item["first_seen_frame"]}</div>'
+                        numbers_html += '</div>'
+                    numbers_html += '</div>'
+                    text_with_numbers_container.markdown(numbers_html, unsafe_allow_html=True)
+                else:
+                    text_with_numbers_container.info("No text with numbers detected yet")
+                
+                # Text only column
+                if video_data['text_only']:
+                    text_html = '<div style="max-height: 400px; overflow-y: auto;">'
+                    for item in video_data['text_only']:
+                        text_html += f'<div style="padding: 8px; margin: 4px 0; background: #2e3140; border-radius: 4px; border-left: 3px solid #3b82f6;">'
+                        text_html += f'<div style="color: #3b82f6; font-weight: 600;">{item["text"]}</div>'
+                        text_html += f'<div style="color: #a0a0a0; font-size: 0.85em;">Confidence: {item["confidence"]:.2%} | Frame: {item["first_seen_frame"]}</div>'
+                        text_html += '</div>'
+                    text_html += '</div>'
+                    text_only_container.markdown(text_html, unsafe_allow_html=True)
+                else:
+                    text_only_container.info("No text-only detected yet")
+                
+                # Display frames with text
+                if video_data['frames_with_text']:
+                    frames_html = '<div style="max-height: 300px; overflow-y: auto;">'
+                    for frame_data in reversed(video_data['frames_with_text'][-5:]):  # Show last 5 frames
+                        frame_path = ocr_db.get_frame_image_path(frame_data['frame_image'])
+                        if frame_path.exists():
+                            frames_html += f'<div style="margin: 10px 0; padding: 10px; background: #1e2130; border-radius: 8px;">'
+                            frames_html += f'<div style="color: #10b981; font-weight: 600; margin-bottom: 5px;">Frame {frame_data["frame_number"]}</div>'
+                            frames_html += f'<img src="data:image/jpeg;base64,{get_image_base64(str(frame_path))}" style="width: 100%; border-radius: 4px; margin: 5px 0;">'
+                            frames_html += '<div style="margin-top: 5px;">'
+                            for text in frame_data['texts']:
+                                frames_html += f'<span style="background: #10b981; color: black; padding: 2px 6px; border-radius: 3px; margin: 2px; display: inline-block; font-size: 0.85em;">{text["text"]}</span>'
+                            frames_html += '</div></div>'
+                    frames_html += '</div>'
+                    frames_container.markdown(frames_html, unsafe_allow_html=True)
     
     st.session_state.processing = False
     st.success("✅ Video processing complete!")
+    
+    if enable_ocr and video_id:
+        report_path = ocr_db.export_video_report(video_id)
+        st.success(f"📄 OCR Report saved: {report_path}")
     
     if save_video:
         st.success(f"💾 Video saved to: {output_filename if save_video else 'processed_output.mp4'}")
         st.info("You can download the file from your project directory")
 
+
+def get_image_base64(image_path):
+    """Convert image to base64 for HTML display"""
+    import base64
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
 if 'processing' not in st.session_state:
     st.session_state.processing = False
     st.info("👈 Select a video and click 'Process Video' to start")
