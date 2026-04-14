@@ -7,79 +7,168 @@ from concurrent.futures import ThreadPoolExecutor
 import easyocr
 from ocr_database import OCRDatabase
 
-st.set_page_config(page_title="AI Video Processing Pipeline", layout="wide")
+st.set_page_config(page_title="🚂 AI Wagon Detection System", layout="wide", initial_sidebar_state="expanded")
 
-# Custom CSS for clean, compact layout
+# Custom CSS for beautiful, modern UI
 st.markdown("""
 <style>
     .stApp {
-        background-color: #0e1117;
+        background: linear-gradient(135deg, #0e1117 0%, #1a1d2e 100%);
     }
     .block-container {
         padding-top: 1rem;
         padding-bottom: 1rem;
     }
     div[data-testid="column"] {
-        background-color: #1e2130;
-        padding: 0.8rem;
-        border-radius: 8px;
-        border: 1px solid #2e3140;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        background: linear-gradient(145deg, #1e2130 0%, #252837 100%);
+        padding: 1rem;
+        border-radius: 12px;
+        border: 1px solid #3b82f6;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+        transition: all 0.3s ease;
+    }
+    div[data-testid="column"]:hover {
+        box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+        transform: translateY(-2px);
     }
     .main-title {
-        font-size: 1.8rem;
-        font-weight: bold;
+        font-size: 2.5rem;
+        font-weight: 800;
         margin-bottom: 0.5rem;
         text-align: center;
-        color: #ffffff;
+        background: linear-gradient(90deg, #3b82f6, #10b981, #f59e0b);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-shadow: 0 0 30px rgba(59, 130, 246, 0.5);
+    }
+    .subtitle {
+        text-align: center;
+        color: #a0a0a0;
+        font-size: 1.1rem;
+        margin-bottom: 1.5rem;
     }
     .stImage {
-        border-radius: 6px;
+        border-radius: 10px;
         overflow: hidden;
+        border: 2px solid #3b82f6;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     }
     h3 {
         margin-top: 0 !important;
         padding-top: 0 !important;
-        font-size: 1rem !important;
+        font-size: 1.1rem !important;
         margin-bottom: 0.5rem !important;
+        color: #3b82f6 !important;
+        font-weight: 700 !important;
+    }
+    .wagon-card {
+        background: linear-gradient(145deg, #1e2130, #252837);
+        border: 2px solid #10b981;
+        border-radius: 12px;
+        padding: 1.2rem;
+        margin: 0.8rem 0;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        transition: all 0.3s ease;
+    }
+    .wagon-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
+    }
+    .wagon-id {
+        color: #10b981;
+        font-weight: 700;
+        font-size: 1.3rem;
+        margin-bottom: 0.5rem;
+    }
+    .wagon-detail {
+        color: #e0e0e0;
+        font-size: 0.95rem;
+        margin: 0.3rem 0;
+        padding-left: 1rem;
+    }
+    .wagon-confidence {
+        color: #f59e0b;
+        font-weight: 600;
+        font-size: 0.9rem;
     }
     .ocr-data-box {
-        background-color: #1a1d2e;
-        border: 1px solid #2e3140;
-        border-radius: 8px;
+        background: linear-gradient(145deg, #1a1d2e, #252837);
+        border: 2px solid #3b82f6;
+        border-radius: 12px;
         padding: 1rem;
         margin-top: 0.5rem;
-        max-height: 400px;
+        max-height: 450px;
         overflow-y: auto;
     }
     .ocr-entry {
-        background-color: #252837;
-        padding: 0.5rem;
-        margin-bottom: 0.5rem;
-        border-radius: 4px;
-        border-left: 3px solid #10b981;
+        background: linear-gradient(145deg, #252837, #2e3140);
+        padding: 0.8rem;
+        margin-bottom: 0.6rem;
+        border-radius: 8px;
+        border-left: 4px solid #10b981;
+        transition: all 0.2s ease;
+    }
+    .ocr-entry:hover {
+        border-left: 4px solid #3b82f6;
+        transform: translateX(5px);
     }
     .ocr-timestamp {
         color: #10b981;
-        font-weight: 600;
-        font-size: 0.85rem;
+        font-weight: 700;
+        font-size: 0.9rem;
     }
     .ocr-text {
         color: #ffffff;
-        font-size: 0.9rem;
-        margin-top: 0.3rem;
+        font-size: 1rem;
+        margin-top: 0.4rem;
+        font-weight: 600;
     }
     .ocr-confidence {
-        color: #a0a0a0;
-        font-size: 0.8rem;
+        color: #f59e0b;
+        font-size: 0.85rem;
+        font-weight: 600;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 1.2rem;
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #3b82f6;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.9rem;
+        color: #a0a0a0;
+    }
+    .detection-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        padding: 0.4rem 0.8rem;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin: 0.2rem;
+        box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+    }
+    .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+        animation: pulse 2s infinite;
+    }
+    .status-active {
+        background: #10b981;
+        box-shadow: 0 0 10px #10b981;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<h1 class="main-title">🎥 AI Video Processing Pipeline</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-title">🚂 AI Wagon Detection System</h1>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Advanced Railway Wagon Identification & OCR Processing Pipeline</p>', unsafe_allow_html=True)
 
 # Initialize OCR Database
 @st.cache_resource
@@ -199,6 +288,15 @@ with st.sidebar:
                                 help="Update UI every N frames for better performance")
     
     st.divider()
+    st.subheader("🚂 Wagon Detection")
+    enable_wagon_detection = st.checkbox("Enable AI Wagon Detection", value=True,
+                                        help="Detect railway wagons using YOLOv8")
+    if enable_wagon_detection:
+        wagon_conf_threshold = st.slider("Detection Confidence", 0.1, 1.0, 0.25, 0.05,
+                                        help="Minimum confidence for wagon detection")
+        show_wagon_details = st.checkbox("Show Detailed Wagon Info", value=True)
+    
+    st.divider()
     st.subheader("🔧 Pipeline Steps")
     enable_blur_detection = st.checkbox("Step 2: Blur Detection", value=True)
     if enable_blur_detection:
@@ -214,11 +312,9 @@ with st.sidebar:
 
     
     if enable_ocr:
-        use_batch_ocr = st.checkbox("Enable Batch Processing (GPU)", value=True,
-                                   help="Process multiple frames at once for better GPU utilization")
-        if use_batch_ocr:
-            batch_size = st.slider("Batch Size", 2, 8, 4,
-                                  help="Number of frames to process together (higher = faster but more VRAM)")
+        # Batch processing disabled for now
+        use_batch_ocr = False
+        batch_size = 4
         
         ocr_confidence_threshold = st.slider("OCR Confidence Threshold", 0.5, 1.0, 0.7, 0.05)
         ocr_interval = st.slider("OCR Capture Interval (seconds)", 1, 10, 1,
@@ -287,7 +383,7 @@ if 'selected_result' in locals() and selected_result and not process_button:
                     
                     with col:
                         if frame_path.exists():
-                            st.image(str(frame_path), caption=f"Frame {frame_data['frame_number']}", use_column_width=True)
+                            st.image(str(frame_path), caption=f"Frame {frame_data['frame_number']}")
                             texts = ", ".join([f"{t['text']} ({t['confidence']:.2%})" for t in frame_data['texts']])
                             st.caption(f"📝 {texts}")
                         else:
@@ -297,56 +393,64 @@ if 'selected_result' in locals() and selected_result and not process_button:
     
     st.stop()  # Don't show processing interface when viewing results
 
-# Main content area - compact layout
-col1, col2, col3, col4 = st.columns([3, 3, 3, 3], gap="small")
+# Main content area - modern grid layout
+col1, col2, col3, col4 = st.columns([3, 3, 3, 3], gap="medium")
 
 with col1:
-    st.markdown("### 📹 Original")
+    st.markdown("### 📹 Original Feed")
     frame_placeholder = st.empty()
 
 with col2:
-    st.markdown("### 🔍 Blur Detection")
+    st.markdown("### 🔍 Blur Analysis")
     blur_placeholder = st.empty()
 
 with col3:
-    st.markdown("### ✨ Enhanced")
+    st.markdown("### ✨ Enhanced Frame")
     enhance_placeholder = st.empty()
 
 with col4:
-    st.markdown("### 📝 OCR")
-    ocr_placeholder = st.empty()
+    st.markdown("### 🚂 Wagon Detection")
+    wagon_placeholder = st.empty()
 
-# Stats area - compact
+# Stats area - enhanced metrics
 st.divider()
-stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4, gap="small")
+stats_col1, stats_col2, stats_col3, stats_col4, stats_col5 = st.columns(5, gap="small")
 with stats_col1:
     frame_counter = st.empty()
 with stats_col2:
     fps_display = st.empty()
 with stats_col3:
-    progress_display = st.empty()
+    wagon_counter = st.empty()
 with stats_col4:
+    progress_display = st.empty()
+with stats_col5:
     time_display = st.empty()
 
 progress_bar = st.progress(0)
 
+# Wagon Detection Details Section (commented out)
+# if 'enable_wagon_detection' in locals() and enable_wagon_detection and 'show_wagon_details' in locals() and show_wagon_details:
+#     st.divider()
+#     st.markdown("### 🚂 Detected Wagons")
+#     wagon_details_container = st.empty()
+
 # OCR Data Display Section
 if enable_ocr:
     st.divider()
-    st.markdown("### 📊 OCR Results")
+    st.markdown("### 📊 OCR Text Extraction Results")
     
     col_left, col_right = st.columns(2)
     
     with col_left:
-        st.markdown("#### 🔢 Text with Numbers")
+        st.markdown("#### 🔢 Wagon Numbers & IDs")
         text_with_numbers_container = st.empty()
     
     with col_right:
-        st.markdown("#### 📝 Text Only")
+        st.markdown("#### 📝 Additional Text")
         text_only_container = st.empty()
     
     st.divider()
-    st.markdown("### 🖼️ Frames with Detected Text")
+    st.markdown("### 🖼️ Captured Frames with Text")
     frames_container = st.empty()
 
 
@@ -355,6 +459,196 @@ def get_image_base64(image_path):
     import base64
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode()
+
+@st.cache_resource
+def load_yolo_model(model_path='yolov8n.pt'):
+    """Load and cache YOLO model for wagon detection"""
+    try:
+        from ultralytics import YOLO
+        model = YOLO(model_path)
+        return model
+    except Exception as e:
+        st.error(f"Failed to load YOLO model: {e}")
+        return None
+
+def detect_wagons(frame, model, conf_threshold=0.25):
+    """
+    Detect railway wagons using YOLOv8 model with gap-based segmentation
+    
+    Args:
+        frame: Input frame (BGR)
+        model: YOLOv8 model instance
+        conf_threshold: Confidence threshold for detections
+        
+    Returns:
+        annotated_frame: Frame with bounding boxes
+        detections: List of detection details
+    """
+    if model is None:
+        return frame, []
+    
+    # COCO classes that might represent wagons/trains
+    WAGON_RELATED_CLASSES = {
+        5: 'Bus/Wagon',      # bus
+        6: 'Train/Wagon',    # train
+        7: 'Truck/Wagon',    # truck
+        2: 'Vehicle/Wagon'   # car (large vehicles might be detected as cars)
+    }
+    
+    # Run YOLOv8 inference
+    results = model(frame, conf=conf_threshold, verbose=False)
+    
+    # Create copy for annotation
+    annotated_frame = frame.copy()
+    
+    # Extract detection information
+    detections = []
+    wagon_count = 0
+    
+    for result in results:
+        boxes = result.boxes
+        for box in boxes:
+            # Extract box coordinates and confidence
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            confidence = float(box.conf[0])
+            class_id = int(box.cls[0])
+            class_name = model.names[class_id]
+            
+            # Filter: Only process wagon-related classes
+            if class_id not in WAGON_RELATED_CLASSES:
+                continue
+            
+            wagon_type = WAGON_RELATED_CLASSES[class_id]
+            
+            # Convert to integers for drawing
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            
+            # Calculate dimensions
+            width = x2 - x1
+            height = y2 - y1
+            
+            # Try to segment into individual wagons if detection is large
+            # Assume wagons are roughly similar in width
+            estimated_wagon_width = height * 1.5  # Typical wagon aspect ratio
+            num_wagons = max(1, int(width / estimated_wagon_width))
+            
+            if num_wagons > 1:
+                # Split the detection into multiple wagons
+                segment_width = width // num_wagons
+                
+                for i in range(num_wagons):
+                    wagon_count += 1
+                    seg_x1 = x1 + (i * segment_width)
+                    seg_x2 = seg_x1 + segment_width
+                    
+                    # Draw bounding box
+                    cv2.rectangle(annotated_frame, (seg_x1, y1), (seg_x2, y2), (0, 255, 0), 3)
+                    
+                    # Draw corner markers
+                    corner_length = 20
+                    cv2.line(annotated_frame, (seg_x1, y1), (seg_x1 + corner_length, y1), (0, 255, 255), 4)
+                    cv2.line(annotated_frame, (seg_x1, y1), (seg_x1, y1 + corner_length), (0, 255, 255), 4)
+                    cv2.line(annotated_frame, (seg_x2, y1), (seg_x2 - corner_length, y1), (0, 255, 255), 4)
+                    cv2.line(annotated_frame, (seg_x2, y1), (seg_x2, y1 + corner_length), (0, 255, 255), 4)
+                    cv2.line(annotated_frame, (seg_x1, y2), (seg_x1 + corner_length, y2), (0, 255, 255), 4)
+                    cv2.line(annotated_frame, (seg_x1, y2), (seg_x1, y2 - corner_length), (0, 255, 255), 4)
+                    cv2.line(annotated_frame, (seg_x2, y2), (seg_x2 - corner_length, y2), (0, 255, 255), 4)
+                    cv2.line(annotated_frame, (seg_x2, y2), (seg_x2, y2 - corner_length), (0, 255, 255), 4)
+                    
+                    # Label
+                    label_text = f"Wagon #{wagon_count}"
+                    conf_text = f"{confidence:.2%}"
+                    
+                    (text_width, text_height), baseline = cv2.getTextSize(
+                        label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
+                    )
+                    
+                    cv2.rectangle(annotated_frame, 
+                                 (seg_x1, y1 - text_height - 15), 
+                                 (seg_x1 + text_width + 10, y1), 
+                                 (0, 255, 0), -1)
+                    
+                    cv2.putText(annotated_frame, label_text, 
+                               (seg_x1 + 5, y1 - 8), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    
+                    cv2.putText(annotated_frame, conf_text, 
+                               (seg_x1 + 5, y2 + 25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    # Store detection
+                    detection = {
+                        'id': wagon_count,
+                        'class': class_id,
+                        'class_name': wagon_type,
+                        'original_class': class_name,
+                        'confidence': confidence,
+                        'bbox': [seg_x1, y1, seg_x2, y2],
+                        'width': segment_width,
+                        'height': height,
+                        'area': segment_width * height,
+                        'center_x': (seg_x1 + seg_x2) // 2,
+                        'center_y': (y1 + y2) // 2,
+                        'segmented': True
+                    }
+                    detections.append(detection)
+            else:
+                # Single wagon detection
+                wagon_count += 1
+                
+                # Draw bounding box
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                
+                # Draw corner markers
+                corner_length = 20
+                cv2.line(annotated_frame, (x1, y1), (x1 + corner_length, y1), (0, 255, 255), 4)
+                cv2.line(annotated_frame, (x1, y1), (x1, y1 + corner_length), (0, 255, 255), 4)
+                cv2.line(annotated_frame, (x2, y1), (x2 - corner_length, y1), (0, 255, 255), 4)
+                cv2.line(annotated_frame, (x2, y1), (x2, y1 + corner_length), (0, 255, 255), 4)
+                cv2.line(annotated_frame, (x1, y2), (x1 + corner_length, y2), (0, 255, 255), 4)
+                cv2.line(annotated_frame, (x1, y2), (x1, y2 - corner_length), (0, 255, 255), 4)
+                cv2.line(annotated_frame, (x2, y2), (x2 - corner_length, y2), (0, 255, 255), 4)
+                cv2.line(annotated_frame, (x2, y2), (x2, y2 - corner_length), (0, 255, 255), 4)
+                
+                # Label
+                label_text = f"Wagon #{wagon_count}"
+                conf_text = f"{confidence:.2%}"
+                
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
+                )
+                
+                cv2.rectangle(annotated_frame, 
+                             (x1, y1 - text_height - 15), 
+                             (x1 + text_width + 10, y1), 
+                             (0, 255, 0), -1)
+                
+                cv2.putText(annotated_frame, label_text, 
+                           (x1 + 5, y1 - 8), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                
+                cv2.putText(annotated_frame, conf_text, 
+                           (x1 + 5, y2 + 25), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Store detection
+                detection = {
+                    'id': wagon_count,
+                    'class': class_id,
+                    'class_name': wagon_type,
+                    'original_class': class_name,
+                    'confidence': confidence,
+                    'bbox': [x1, y1, x2, y2],
+                    'width': width,
+                    'height': height,
+                    'area': width * height,
+                    'center_x': (x1 + x2) // 2,
+                    'center_y': (y1 + y2) // 2,
+                    'segmented': False
+                }
+                detections.append(detection)
+    
+    return annotated_frame, detections
 
 def detect_blur(frame, threshold=100.0):
     """Detect blur using Laplacian variance method - GPU optimized"""
@@ -556,10 +850,19 @@ def initialize_ocr_engine():
 
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
                         update_interval=5, enable_enhance=False, enhance_strength=1.1,
+                        enable_wagon_detect=False, wagon_conf=0.25,
                         enable_ocr=False, use_batch_ocr=False, batch_size=4, ocr_confidence=0.7, ocr_interval=1, 
                         save_video=False, output_filename="processed_output.mp4", ocr_db=None, video_id=None,
                         use_camera=False, camera_index=0):
-    """Process video or camera feed with optimized performance and optional batch OCR"""
+    """Process video or camera feed with wagon detection and OCR"""
+    # Initialize YOLO model for wagon detection
+    wagon_model = None
+    if enable_wagon_detect:
+        wagon_model = load_yolo_model('yolov8n.pt')
+        if wagon_model is None:
+            st.error("Failed to load wagon detection model")
+            enable_wagon_detect = False
+    
     # Initialize OCR if enabled
     ocr_engine = None
     ocr_frame_buffer = []  # Buffer for batch processing
@@ -693,6 +996,20 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, enhance_color, 2)
             enhanced_frame = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2RGB)
         
+        # Wagon Detection
+        wagon_frame = None
+        wagon_detections = []
+        total_wagons_detected = 0
+        
+        if enable_wagon_detect and wagon_model:
+            wagon_result, wagon_detections = detect_wagons(enhanced_result, wagon_model, wagon_conf)
+            total_wagons_detected = len(wagon_detections)
+            
+            wagon_frame = wagon_result.copy()
+            cv2.putText(wagon_frame, f"Wagons: {total_wagons_detected}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            wagon_frame = cv2.cvtColor(wagon_frame, cv2.COLOR_BGR2RGB)
+        
         ocr_frame = None
         text_results = []
         should_capture_ocr = False
@@ -818,6 +1135,9 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
             'frame': display_frame,
             'blur_frame': blur_frame,
             'enhanced_frame': enhanced_frame,
+            'wagon_frame': wagon_frame,
+            'wagon_detections': wagon_detections,
+            'total_wagons_detected': total_wagons_detected,
             'ocr_frame': ocr_frame,
             'text_results': text_results,
             'frame_count': frame_count,
@@ -857,6 +1177,8 @@ if process_button:
         blur_threshold if enable_blur_detection else 100.0,
         update_interval, enable_enhancement,
         enhancement_strength if enable_enhancement else 1.1,
+        enable_wagon_detection,
+        wagon_conf_threshold if enable_wagon_detection else 0.25,
         enable_ocr,
         use_batch_ocr if enable_ocr else False,
         batch_size if (enable_ocr and use_batch_ocr) else 4,
@@ -870,33 +1192,51 @@ if process_button:
         camera_index if use_camera else 0
     ):
         if stop_button or not st.session_state.get('processing', False):
-            st.warning("Processing stopped by user")
+            st.warning("⏹️ Processing stopped by user")
             break
         
-        frame_placeholder.image(data['frame'], channels="RGB", width="stretch")
+        frame_placeholder.image(data['frame'], channels="RGB")
         
         if data['blur_frame'] is not None:
-            blur_placeholder.image(data['blur_frame'], channels="RGB", width="stretch")
+            blur_placeholder.image(data['blur_frame'], channels="RGB")
         else:
-            blur_placeholder.info("Disabled")
+            blur_placeholder.info("⚠️ Disabled")
         
         if data['enhanced_frame'] is not None:
-            enhance_placeholder.image(data['enhanced_frame'], channels="RGB", width="stretch")
+            enhance_placeholder.image(data['enhanced_frame'], channels="RGB")
         else:
-            enhance_placeholder.info("Disabled")
+            enhance_placeholder.info("⚠️ Disabled")
         
-        if data['ocr_frame'] is not None:
-            ocr_placeholder.image(data['ocr_frame'], channels="RGB", width="stretch")
+        if data['wagon_frame'] is not None:
+            wagon_placeholder.image(data['wagon_frame'], channels="RGB")
         else:
-            ocr_placeholder.info("Disabled")
+            wagon_placeholder.info("⚠️ Disabled")
         
         # Update stats
-        frame_counter.metric("Frame", f"{data['frame_count']}/{data['total_frames']}")
-        fps_display.metric("FPS", f"{data['current_fps']:.1f}")
-        progress_display.metric("Progress", f"{(data['frame_count']/data['total_frames']*100):.1f}%")
-        time_display.metric("Time", f"{data['elapsed_time']:.1f}s")
+        frame_counter.metric("📊 Frame", f"{data['frame_count']}/{data['total_frames']}")
+        fps_display.metric("⚡ FPS", f"{data['current_fps']:.1f}")
+        wagon_counter.metric("🚂 Wagons", data.get('total_wagons_detected', 0))
+        progress_display.metric("📈 Progress", f"{(data['frame_count']/data['total_frames']*100):.1f}%")
+        time_display.metric("⏱️ Time", f"{data['elapsed_time']:.1f}s")
         
         progress_bar.progress(data['frame_count'] / data['total_frames'])
+        
+        # Display wagon details (commented out)
+        # if enable_wagon_detection and show_wagon_details and data.get('wagon_detections'):
+        #     wagon_html = '<div style="max-height: 400px; overflow-y: auto;">'
+        #     for wagon in data['wagon_detections']:
+        #         wagon_html += f'''
+        #         <div class="wagon-card">
+        #             <div class="wagon-id">🚂 Wagon #{wagon['id']}</div>
+        #             <div class="wagon-detail">📦 Type: {wagon['class_name']}</div>
+        #             <div class="wagon-detail">📏 Dimensions: {wagon['width']}x{wagon['height']} px</div>
+        #             <div class="wagon-detail">📍 Position: ({wagon['center_x']}, {wagon['center_y']})</div>
+        #             <div class="wagon-detail">📐 Area: {wagon['area']:,} px²</div>
+        #             <div class="wagon-confidence">✨ Confidence: {wagon['confidence']:.2%}</div>
+        #         </div>
+        #         '''
+        #     wagon_html += '</div>'
+        #     wagon_details_container.markdown(wagon_html, unsafe_allow_html=True)
         
         # Display OCR results from database
         if enable_ocr and video_id:
