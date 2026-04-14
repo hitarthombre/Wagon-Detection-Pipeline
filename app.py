@@ -109,8 +109,8 @@ with st.sidebar:
         st.error("No video files found in 'video' folder")
         st.stop()
     
-    process_button = st.button("▶️ Process Video", type="primary", use_container_width=True)
-    stop_button = st.button("⏹️ Stop", use_container_width=True)
+    process_button = st.button("▶️ Process Video", type="primary", width="stretch")
+    stop_button = st.button("⏹️ Stop", width="stretch")
     
     st.divider()
     st.subheader("⚡ Performance")
@@ -595,20 +595,20 @@ if process_button:
             st.warning("Processing stopped by user")
             break
         
-        frame_placeholder.image(data['frame'], channels="RGB", use_container_width=True)
+        frame_placeholder.image(data['frame'], channels="RGB", width="stretch")
         
         if data['blur_frame'] is not None:
-            blur_placeholder.image(data['blur_frame'], channels="RGB", use_container_width=True)
+            blur_placeholder.image(data['blur_frame'], channels="RGB", width="stretch")
         else:
             blur_placeholder.info("Disabled")
         
         if data['enhanced_frame'] is not None:
-            enhance_placeholder.image(data['enhanced_frame'], channels="RGB", use_container_width=True)
+            enhance_placeholder.image(data['enhanced_frame'], channels="RGB", width="stretch")
         else:
             enhance_placeholder.info("Disabled")
         
         if data['ocr_frame'] is not None:
-            ocr_placeholder.image(data['ocr_frame'], channels="RGB", use_container_width=True)
+            ocr_placeholder.image(data['ocr_frame'], channels="RGB", width="stretch")
         else:
             ocr_placeholder.info("Disabled")
         

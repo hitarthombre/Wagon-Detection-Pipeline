@@ -124,24 +124,44 @@ class PaddleOCREngine(OCREngine):
         self.use_gpu = use_gpu
         
     def initialize(self):
-        """Initialize PaddleOCR 2.7.x"""
+        """Initialize PaddleOCR"""
         try:
             from paddleocr import PaddleOCR
+            import logging
+            import os
             
-            print("Loading PaddleOCR 2.7.x...")
-            # Use stable 2.7.x API
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang='en',
-                use_gpu=self.use_gpu,
-                show_log=False
-            )
-            print("PaddleOCR 2.7.x initialized")
+            # Suppress PaddleOCR logging
+            logging.getLogger('ppocr').setLevel(logging.ERROR)
+            
+            # Bypass model source check for faster startup
+            os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+            
+            print("Loading PaddleOCR...")
+            # Initialize with minimal parameters (newer versions have different API)
+            try:
+                # Try with use_gpu parameter first (older versions)
+                self.ocr = PaddleOCR(
+                    use_angle_cls=True,
+                    lang='en',
+                    use_gpu=self.use_gpu
+                )
+            except Exception as e:
+                # If use_gpu not supported, try without it (newer versions)
+                if "use_gpu" in str(e) or "Unknown argument" in str(e):
+                    print("Note: use_gpu parameter not supported, using default device")
+                    self.ocr = PaddleOCR(
+                        use_angle_cls=True,
+                        lang='en'
+                    )
+                else:
+                    raise
+            print("PaddleOCR initialized")
             return True
         except Exception as e:
             print(f"Failed to initialize PaddleOCR: {e}")
-            print("Make sure you have PaddleOCR 2.7.x installed:")
-            print("  pip install paddleocr==2.7.0.3")
+            print("Try: pip install paddleocr")
+            return False
+            print("Try: pip install paddleocr")
             return False
     
     def extract_text(self, image: np.ndarray) -> Dict:
@@ -203,6 +223,34 @@ class TesseractEngine(OCREngine):
         """Initialize Tesseract"""
         try:
             import pytesseract
+            import os
+            
+            # Try to set Tesseract path for Windows
+            possible_paths = [
+                r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+                r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+                r'C:\Tesseract-OCR\tesseract.exe'
+            ]
+            
+            # Check if tesseract is in PATH or set explicit path
+            tesseract_found = False
+            try:
+                pytesseract.get_tesseract_version()
+                tesseract_found = True
+            except:
+                # Try explicit paths
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        pytesseract.pytesseract.tesseract_cmd = path
+                        try:
+                            pytesseract.get_tesseract_version()
+                            tesseract_found = True
+                            break
+                        except:
+                            continue
+            
+            if not tesseract_found:
+                raise Exception("Tesseract executable not found")
             
             # Test if Tesseract is installed
             version = pytesseract.get_tesseract_version()
