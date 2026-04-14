@@ -116,9 +116,22 @@ with st.sidebar:
         enhancement_strength = st.slider("Enhancement Strength", 1.0, 2.0, 1.1, 0.1)
     
     enable_ocr = st.checkbox("Step 4: OCR Text Extraction", value=False,
-                            help="Extract text from frames using EasyOCR")
+                            help="Extract text from frames")
     
     if enable_ocr:
+        ocr_engine_choice = st.selectbox(
+            "OCR Engine",
+            ["EasyOCR", "Tesseract", "PaddleOCR"],
+            help="Select OCR engine to use"
+        )
+        
+        if ocr_engine_choice == "Tesseract":
+            tesseract_mode = st.selectbox(
+                "Tesseract Mode",
+                ["Default", "Digits Only"],
+                help="Restrict to numbers only"
+            )
+        
         ocr_confidence_threshold = st.slider("OCR Confidence Threshold", 0.5, 1.0, 0.7, 0.05)
         ocr_interval = st.slider("OCR Capture Interval (seconds)", 1, 10, 1,
                                 help="Capture OCR data every N seconds")
@@ -224,62 +237,104 @@ def preprocess_for_ocr(frame):
     
     return preprocessed
 
-def perform_ocr(frame, ocr_engine, confidence_threshold=0.7, use_preprocessing=True):
-    """Perform OCR on frame using EasyOCR with enhanced preprocessing"""
+def perform_ocr(frame, ocr_engine, ocr_engine_type='easyocr', confidence_threshold=0.7, use_preprocessing=True):
+    """Perform OCR on frame using selected engine with enhanced preprocessing"""
     ocr_frame = frame.copy()
     text_results = []
     
     try:
-        # Apply preprocessing for better OCR accuracy
-        if use_preprocessing:
-            processed_frame = preprocess_for_ocr(frame)
+        if ocr_engine_type == 'easyocr':
+            # EasyOCR with preprocessing
+            if use_preprocessing:
+                processed_frame = preprocess_for_ocr(frame)
+                results_original = ocr_engine.readtext(frame)
+                results_processed = ocr_engine.readtext(processed_frame)
+                
+                combined_results = {}
+                for bbox, text, confidence in results_original + results_processed:
+                    if text not in combined_results or confidence > combined_results[text][1]:
+                        combined_results[text] = (bbox, confidence)
+                
+                results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
+            else:
+                results = ocr_engine.readtext(frame)
             
-            # Run OCR on both original and preprocessed, combine results
-            results_original = ocr_engine.readtext(frame)
-            results_processed = ocr_engine.readtext(processed_frame)
-            
-            # Combine and deduplicate results (keep higher confidence)
-            combined_results = {}
-            for bbox, text, confidence in results_original + results_processed:
-                if text not in combined_results or confidence > combined_results[text][1]:
-                    combined_results[text] = (bbox, confidence)
-            
-            results = [(bbox, text, conf) for text, (bbox, conf) in combined_results.items()]
-        else:
-            results = ocr_engine.readtext(frame)
+            for (bbox, text, confidence) in results:
+                if confidence >= confidence_threshold:
+                    pts = np.array(bbox, dtype=np.int32)
+                    cv2.polylines(ocr_frame, [pts], True, (0, 255, 0), 2)
+                    
+                    label = f"{text} ({confidence:.2f})"
+                    text_pos = (int(pts[0][0]), int(pts[0][1]) - 10)
+                    (text_width, text_height), baseline = cv2.getTextSize(
+                        label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
+                    )
+                    
+                    cv2.rectangle(
+                        ocr_frame,
+                        (text_pos[0], text_pos[1] - text_height - 5),
+                        (text_pos[0] + text_width, text_pos[1] + 5),
+                        (0, 255, 0), -1
+                    )
+                    
+                    cv2.putText(ocr_frame, label, text_pos, 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                    
+                    text_results.append({
+                        'text': text, 
+                        'confidence': confidence
+                    })
         
-        for (bbox, text, confidence) in results:
-            if confidence >= confidence_threshold:
-                # Draw bounding box
-                pts = np.array(bbox, dtype=np.int32)
-                cv2.polylines(ocr_frame, [pts], True, (0, 255, 0), 2)
-                
-                # Prepare text with confidence
-                label = f"{text} ({confidence:.2f})"
-                
-                # Calculate text size for background
-                text_pos = (int(pts[0][0]), int(pts[0][1]) - 10)
-                (text_width, text_height), baseline = cv2.getTextSize(
-                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
-                )
-                
-                # Draw background rectangle for better visibility
-                cv2.rectangle(
-                    ocr_frame,
-                    (text_pos[0], text_pos[1] - text_height - 5),
-                    (text_pos[0] + text_width, text_pos[1] + 5),
-                    (0, 255, 0), -1
-                )
-                
-                # Draw text in black for contrast
-                cv2.putText(ocr_frame, label, text_pos, 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-                
-                # Add text result
-                text_results.append({
-                    'text': text, 
-                    'confidence': confidence
-                })
+        elif ocr_engine_type == 'tesseract':
+            import pytesseract
+            
+            # Preprocess for Tesseract
+            processed = preprocess_for_ocr(frame) if use_preprocessing else frame
+            gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            
+            # Get detailed data with bounding boxes
+            data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+            
+            for i, conf in enumerate(data['conf']):
+                if int(conf) > 0:
+                    text = data['text'][i].strip()
+                    if text:
+                        confidence = int(conf) / 100.0
+                        if confidence >= confidence_threshold:
+                            x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+                            
+                            cv2.rectangle(ocr_frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                            
+                            label = f"{text} ({confidence:.2f})"
+                            cv2.putText(ocr_frame, label, (x, y - 10),
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            
+                            text_results.append({
+                                'text': text,
+                                'confidence': confidence
+                            })
+        
+        elif ocr_engine_type == 'paddleocr':
+            # PaddleOCR
+            processed = preprocess_for_ocr(frame) if use_preprocessing else frame
+            result = ocr_engine.ocr(processed, cls=True)
+            
+            if result and result[0]:
+                for line in result[0]:
+                    bbox, (text, confidence) = line
+                    if confidence >= confidence_threshold:
+                        points = np.array(bbox, dtype=np.int32)
+                        cv2.polylines(ocr_frame, [points], True, (0, 255, 0), 2)
+                        
+                        label = f"{text} ({confidence:.2f})"
+                        text_pos = (int(points[0][0]), int(points[0][1]) - 10)
+                        cv2.putText(ocr_frame, label, text_pos,
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        
+                        text_results.append({
+                            'text': text,
+                            'confidence': confidence
+                        })
     
     except Exception as e:
         print(f"OCR error: {e}")
@@ -288,29 +343,88 @@ def perform_ocr(frame, ocr_engine, confidence_threshold=0.7, use_preprocessing=T
 
 
 @st.cache_resource
-def initialize_ocr_engine():
-    """Initialize and cache EasyOCR engine"""
+def initialize_ocr_engine(engine_type='easyocr', **kwargs):
+    """Initialize and cache OCR engine"""
     try:
-        reader = easyocr.Reader(['en'], gpu=True)
-        return reader
+        if engine_type == 'easyocr':
+            import easyocr
+            reader = easyocr.Reader(['en'], gpu=True)
+            return reader, 'easyocr'
+        
+        elif engine_type == 'tesseract':
+            import pytesseract
+            import os
+            
+            # Try to find Tesseract executable
+            possible_paths = [
+                r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+                r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+            ]
+            
+            tesseract_found = False
+            try:
+                pytesseract.get_tesseract_version()
+                tesseract_found = True
+            except:
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        pytesseract.pytesseract.tesseract_cmd = path
+                        try:
+                            pytesseract.get_tesseract_version()
+                            tesseract_found = True
+                            break
+                        except:
+                            continue
+            
+            if tesseract_found:
+                # Configure for digits only if requested
+                if kwargs.get('digits_only', False):
+                    return {'config': '--psm 6 -c tessedit_char_whitelist=0123456789'}, 'tesseract'
+                return {'config': '--psm 6'}, 'tesseract'
+            else:
+                st.error("Tesseract not found. Please install from: https://github.com/UB-Mannheim/tesseract/wiki")
+                return None, None
+        
+        elif engine_type == 'paddleocr':
+            from paddleocr import PaddleOCR
+            import logging
+            import os
+            
+            logging.getLogger('ppocr').setLevel(logging.ERROR)
+            os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+            
+            try:
+                ocr = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=True)
+            except:
+                try:
+                    ocr = PaddleOCR(use_angle_cls=True, lang='en')
+                except Exception as e:
+                    st.error(f"Failed to initialize PaddleOCR: {e}")
+                    return None, None
+            
+            return ocr, 'paddleocr'
+        
     except Exception as e:
-        print(f"Failed to initialize EasyOCR: {e}")
-        return None
+        st.error(f"Failed to initialize {engine_type}: {e}")
+        return None, None
+    
+    return None, None
 
 
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
                         update_interval=5, enable_enhance=False, enhance_strength=1.1,
-                        enable_ocr=False, ocr_confidence=0.7, ocr_interval=1, 
-                        save_video=False, output_filename="processed_output.mp4"):
+                        enable_ocr=False, ocr_engine_choice='easyocr', ocr_confidence=0.7, ocr_interval=1, 
+                        save_video=False, output_filename="processed_output.mp4", **ocr_kwargs):
     """Process video with optimized performance"""
     # Initialize OCR if enabled
     ocr_engine = None
+    ocr_engine_type = None
     
     if enable_ocr:
-        ocr_engine = initialize_ocr_engine()
+        ocr_engine, ocr_engine_type = initialize_ocr_engine(ocr_engine_choice, **ocr_kwargs)
         
         if ocr_engine is None:
-            st.error("Failed to initialize EasyOCR")
+            st.error(f"Failed to initialize {ocr_engine_choice}")
             enable_ocr = False
     
     gpu_info = {}
@@ -438,7 +552,7 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
                 should_capture_ocr = True
                 last_ocr_time = current_time
             
-            ocr_result, text_results = perform_ocr(enhanced_result, ocr_engine, ocr_confidence)
+            ocr_result, text_results = perform_ocr(enhanced_result, ocr_engine, ocr_engine_type, ocr_confidence)
             total_text_detected += len(text_results)
             
             # Log OCR data if it's time to capture
@@ -526,16 +640,24 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
 if process_button:
     st.session_state.processing = True
     
+    # Prepare OCR kwargs
+    ocr_kwargs = {}
+    if enable_ocr:
+        if ocr_engine_choice == "Tesseract" and 'tesseract_mode' in locals():
+            ocr_kwargs['digits_only'] = (tesseract_mode == "Digits Only")
+    
     for data in process_video_stream(
         selected_video, skip_frames, enable_blur_detection, 
         blur_threshold if enable_blur_detection else 100.0,
         update_interval, enable_enhancement,
         enhancement_strength if enable_enhancement else 1.1,
-        enable_ocr, 
+        enable_ocr,
+        ocr_engine_choice.lower() if enable_ocr else 'easyocr',
         ocr_confidence_threshold if enable_ocr else 0.7,
         ocr_interval if enable_ocr else 1,
         save_video, 
-        output_filename if save_video else "processed_output.mp4"
+        output_filename if save_video else "processed_output.mp4",
+        **ocr_kwargs
     ):
         if stop_button or not st.session_state.get('processing', False):
             st.warning("Processing stopped by user")
