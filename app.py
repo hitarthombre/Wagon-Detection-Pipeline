@@ -92,8 +92,8 @@ ocr_db = get_ocr_database()
 with st.sidebar:
     st.header("⚙️ Controls")
     
-    # Tab for Process and Logs
-    tab1, tab2 = st.tabs(["▶️ Process", "📋 Logs"])
+    # Tab for Process, Logs, and Results
+    tab1, tab2, tab3 = st.tabs(["▶️ Process", "📋 Logs", "🖼️ Results"])
     
     with tab1:
         # Input source selection
@@ -159,6 +159,39 @@ with st.sidebar:
         else:
             st.info("No previous scans found. Process a video to see logs here.")
     
+    with tab3:
+        st.subheader("🖼️ View Results")
+        all_videos = ocr_db.get_all_videos()
+        
+        if all_videos:
+            # Select video to view
+            video_names = [f"{v['video_name']} ({v['timestamp'][:19]})" for v in reversed(all_videos)]
+            selected_result_idx = st.selectbox(
+                "Select Scan",
+                range(len(video_names)),
+                format_func=lambda x: video_names[x]
+            )
+            
+            selected_result = list(reversed(all_videos))[selected_result_idx]
+            
+            # Export buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📄 Export TXT", width="stretch"):
+                    report_path = ocr_db.export_video_report(selected_result['video_id'])
+                    st.success(f"✅ Saved: {report_path.name}")
+            
+            with col2:
+                if st.button("📕 Export PDF", width="stretch"):
+                    with st.spinner("Generating PDF..."):
+                        pdf_path = ocr_db.export_video_pdf(selected_result['video_id'])
+                        if pdf_path:
+                            st.success(f"✅ Saved: {pdf_path.name}")
+                        else:
+                            st.error("Install reportlab: pip install reportlab")
+        else:
+            st.info("No results yet. Process a video with OCR enabled.")
+    
     st.divider()
     st.subheader("⚡ Performance")
     skip_frames = st.slider("Skip Frames", 0, 10, 0)
@@ -178,6 +211,7 @@ with st.sidebar:
     
     enable_ocr = st.checkbox("Step 4: OCR Text Extraction", value=False,
                             help="Extract text from frames using EasyOCR")
+
     
     if enable_ocr:
         use_batch_ocr = st.checkbox("Enable Batch Processing (GPU)", value=True,
@@ -196,6 +230,72 @@ with st.sidebar:
                             help="Save all 4 stages as video file")
     if save_video:
         output_filename = st.text_input("Output Filename", "processed_output.mp4")
+
+# Results Viewer Section (when viewing previous results)
+if 'selected_result' in locals() and selected_result and not process_button:
+    st.markdown("## 🖼️ Viewing Previous Results")
+    st.markdown(f"**Video:** {selected_result['video_name']} | **Date:** {selected_result['timestamp'][:19]}")
+    
+    # Summary metrics
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    with metric_col1:
+        st.metric("Total Frames", selected_result['total_frames_processed'])
+    with metric_col2:
+        st.metric("Text Detected", selected_result['total_text_detected'])
+    with metric_col3:
+        st.metric("With Numbers", len(selected_result['text_with_numbers']))
+    with metric_col4:
+        st.metric("Text Only", len(selected_result['text_only']))
+    
+    st.divider()
+    
+    # Two columns for categorized text
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.markdown("### 🔢 Text with Numbers")
+        if selected_result['text_with_numbers']:
+            for item in selected_result['text_with_numbers']:
+                st.info(f"**{item['text']}**  \nConfidence: {item['confidence']:.2%} | Frame: {item['first_seen_frame']}")
+        else:
+            st.write("No text with numbers detected")
+    
+    with col_right:
+        st.markdown("### 📝 Text Only")
+        if selected_result['text_only']:
+            for item in selected_result['text_only']:
+                st.success(f"**{item['text']}**  \nConfidence: {item['confidence']:.2%} | Frame: {item['first_seen_frame']}")
+        else:
+            st.write("No text-only detected")
+    
+    st.divider()
+    
+    # Display frames with detected text
+    st.markdown("### 🖼️ Frames with Detected Text")
+    
+    if selected_result['frames_with_text']:
+        # Display in grid
+        cols_per_row = 2
+        frames_data = selected_result['frames_with_text']
+        
+        for i in range(0, len(frames_data), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, col in enumerate(cols):
+                if i + j < len(frames_data):
+                    frame_data = frames_data[i + j]
+                    frame_path = ocr_db.get_frame_image_path(frame_data['frame_image'])
+                    
+                    with col:
+                        if frame_path.exists():
+                            st.image(str(frame_path), caption=f"Frame {frame_data['frame_number']}", use_column_width=True)
+                            texts = ", ".join([f"{t['text']} ({t['confidence']:.2%})" for t in frame_data['texts']])
+                            st.caption(f"📝 {texts}")
+                        else:
+                            st.warning(f"Frame {frame_data['frame_number']} image not found")
+    else:
+        st.info("No frames with detected text")
+    
+    st.stop()  # Don't show processing interface when viewing results
 
 # Main content area - compact layout
 col1, col2, col3, col4 = st.columns([3, 3, 3, 3], gap="small")

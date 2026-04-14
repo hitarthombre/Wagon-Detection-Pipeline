@@ -17,6 +17,8 @@ class OCRDatabase:
         self.db_path.mkdir(exist_ok=True)
         self.frames_path = self.db_path / "frames"
         self.frames_path.mkdir(exist_ok=True)
+        self.reports_path = self.db_path / "reports"
+        self.reports_path.mkdir(exist_ok=True)
         self.index_file = self.db_path / "index.json"
         self.load_index()
     
@@ -148,7 +150,7 @@ class OCRDatabase:
         if not video:
             return None
         
-        report_path = self.db_path / f"{video_id}_report.txt"
+        report_path = self.reports_path / f"{video_id}_report.txt"
         
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write("="*80 + "\n")
@@ -183,3 +185,147 @@ class OCRDatabase:
                     f.write(f"    - {text['text']} (confidence: {text['confidence']:.2f})\n")
         
         return report_path
+    
+    def export_video_pdf(self, video_id):
+        """Export detailed PDF report with images for a video"""
+        try:
+            from reportlab.lib.pagesizes import letter, A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import inch
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle, PageBreak
+            from reportlab.lib import colors
+            from reportlab.lib.enums import TA_CENTER, TA_LEFT
+        except ImportError:
+            print("reportlab not installed. Install with: pip install reportlab")
+            return None
+        
+        video = self.get_video_by_id(video_id)
+        if not video:
+            return None
+        
+        pdf_path = self.reports_path / f"{video_id}_report.pdf"
+        
+        # Create PDF
+        doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Title style
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#10b981'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        
+        # Add title
+        story.append(Paragraph(f"OCR Report: {video['video_name']}", title_style))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Add metadata
+        metadata = [
+            ['Scan Date:', video['timestamp'][:19]],
+            ['Total Frames:', str(video['total_frames_processed'])],
+            ['Text Detected:', str(video['total_text_detected'])],
+            ['Frames with Text:', str(len(video['frames_with_text']))]
+        ]
+        
+        t = Table(metadata, colWidths=[2*inch, 4*inch])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#2e3140')),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Text with Numbers section
+        story.append(Paragraph("🔢 Text with Numbers", styles['Heading2']))
+        story.append(Spacer(1, 0.1*inch))
+        
+        if video['text_with_numbers']:
+            numbers_data = [['Text', 'Confidence', 'First Frame']]
+            for item in video['text_with_numbers']:
+                numbers_data.append([
+                    item['text'],
+                    f"{item['confidence']:.2%}",
+                    str(item['first_seen_frame'])
+                ])
+            
+            t = Table(numbers_data, colWidths=[3*inch, 1.5*inch, 1.5*inch])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+            ]))
+            story.append(t)
+        else:
+            story.append(Paragraph("No text with numbers detected", styles['Normal']))
+        
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Text Only section
+        story.append(Paragraph("📝 Text Only (No Numbers)", styles['Heading2']))
+        story.append(Spacer(1, 0.1*inch))
+        
+        if video['text_only']:
+            text_data = [['Text', 'Confidence', 'First Frame']]
+            for item in video['text_only']:
+                text_data.append([
+                    item['text'],
+                    f"{item['confidence']:.2%}",
+                    str(item['first_seen_frame'])
+                ])
+            
+            t = Table(text_data, colWidths=[3*inch, 1.5*inch, 1.5*inch])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3b82f6')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+            ]))
+            story.append(t)
+        else:
+            story.append(Paragraph("No text-only detected", styles['Normal']))
+        
+        story.append(PageBreak())
+        
+        # Frames with detected text
+        story.append(Paragraph("🖼️ Frames with Detected Text", styles['Heading2']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        for frame_data in video['frames_with_text']:
+            frame_path = self.get_frame_image_path(frame_data['frame_image'])
+            
+            if frame_path.exists():
+                story.append(Paragraph(f"Frame {frame_data['frame_number']}", styles['Heading3']))
+                
+                # Add image
+                try:
+                    img = RLImage(str(frame_path), width=5*inch, height=3*inch)
+                    story.append(img)
+                except:
+                    story.append(Paragraph(f"[Image: {frame_data['frame_image']}]", styles['Normal']))
+                
+                # Add detected text
+                story.append(Spacer(1, 0.1*inch))
+                texts = ", ".join([f"{t['text']} ({t['confidence']:.2%})" for t in frame_data['texts']])
+                story.append(Paragraph(f"<b>Detected:</b> {texts}", styles['Normal']))
+                story.append(Spacer(1, 0.3*inch))
+        
+        # Build PDF
+        doc.build(story)
+        return pdf_path

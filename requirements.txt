@@ -2,6 +2,7 @@ opencv-contrib-python>=4.8.0
 streamlit>=1.28.0
 numpy>=1.24.0
 ultralytics>=8.0.0
+reportlab>=4.0.0
 
 # OCR Engines (choose one or both)
 easyocr>=1.7.0  # Recommended - stable and reliable
