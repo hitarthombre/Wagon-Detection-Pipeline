@@ -96,19 +96,41 @@ with st.sidebar:
     tab1, tab2 = st.tabs(["▶️ Process", "📋 Logs"])
     
     with tab1:
-        video_files = list(Path("video").glob("*.mp4"))
+        # Input source selection
+        input_source = st.radio(
+            "Input Source",
+            ["📁 Video File", "📷 Camera"],
+            horizontal=True
+        )
         
-        if video_files:
-            selected_video = st.selectbox(
-                "Select Video",
-                video_files,
-                format_func=lambda x: x.name
-            )
+        selected_video = None
+        use_camera = False
+        camera_index = 0
+        
+        if input_source == "📁 Video File":
+            video_files = list(Path("video").glob("*.mp4"))
+            
+            if video_files:
+                selected_video = st.selectbox(
+                    "Select Video",
+                    video_files,
+                    format_func=lambda x: x.name
+                )
+            else:
+                st.error("No video files found in 'video' folder")
+                st.stop()
         else:
-            st.error("No video files found in 'video' folder")
-            st.stop()
+            use_camera = True
+            camera_index = st.number_input(
+                "Camera Index",
+                min_value=0,
+                max_value=10,
+                value=0,
+                help="Usually 0 for built-in webcam, 1+ for external cameras"
+            )
+            st.info("📷 Live camera feed will be processed in real-time")
         
-        process_button = st.button("▶️ Process Video", type="primary", width="stretch")
+        process_button = st.button("▶️ Start Processing", type="primary", width="stretch")
         stop_button = st.button("⏹️ Stop", width="stretch")
     
     with tab2:
@@ -227,6 +249,12 @@ if enable_ocr:
     st.markdown("### 🖼️ Frames with Detected Text")
     frames_container = st.empty()
 
+
+def get_image_base64(image_path):
+    """Convert image to base64 for HTML display"""
+    import base64
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
 
 def detect_blur(frame, threshold=100.0):
     """Detect blur using Laplacian variance method - GPU optimized"""
@@ -429,8 +457,9 @@ def initialize_ocr_engine():
 def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_threshold=100.0, 
                         update_interval=5, enable_enhance=False, enhance_strength=1.1,
                         enable_ocr=False, use_batch_ocr=False, batch_size=4, ocr_confidence=0.7, ocr_interval=1, 
-                        save_video=False, output_filename="processed_output.mp4", ocr_db=None, video_id=None):
-    """Process video with optimized performance and optional batch OCR"""
+                        save_video=False, output_filename="processed_output.mp4", ocr_db=None, video_id=None,
+                        use_camera=False, camera_index=0):
+    """Process video or camera feed with optimized performance and optional batch OCR"""
     # Initialize OCR if enabled
     ocr_engine = None
     ocr_frame_buffer = []  # Buffer for batch processing
@@ -455,27 +484,34 @@ def process_video_stream(video_path, skip_frames=0, enable_blur=False, blur_thre
         gpu_info['opencl_available'] = False
         gpu_info['opencl_enabled'] = False
     
-    cap = cv2.VideoCapture(str(video_path), cv2.CAP_ANY)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
-    
-    try:
-        cap.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
-        gpu_info['hw_decode'] = True
-    except:
-        gpu_info['hw_decode'] = False
+    # Open video source (file or camera)
+    if use_camera:
+        cap = cv2.VideoCapture(camera_index)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer for live feed
+        source_name = f"Camera_{camera_index}"
+    else:
+        cap = cv2.VideoCapture(str(video_path), cv2.CAP_ANY)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        source_name = video_path.name
+        
+        try:
+            cap.set(cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY)
+            gpu_info['hw_decode'] = True
+        except:
+            gpu_info['hw_decode'] = False
     
     if not cap.isOpened():
-        st.error(f"Cannot open video: {video_path}")
+        st.error(f"Cannot open {'camera' if use_camera else 'video'}: {camera_index if use_camera else video_path}")
         return
     
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) if not use_camera else 30.0  # Default 30 FPS for camera
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if not use_camera else 999999  # Infinite for camera
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
     # Initialize video writer if saving
     video_writer = None
-    if save_video:
+    if save_video and not use_camera:  # Don't save camera feed by default
         # Create 2x2 grid size (each frame will be resized to fit)
         grid_width = 1280
         grid_height = 960
@@ -712,10 +748,12 @@ if process_button:
     st.session_state.processing = True
     
     # Create new video log entry
-    video_id = ocr_db.create_video_log(selected_video.name) if enable_ocr else None
+    source_name = f"Camera_{camera_index}" if use_camera else selected_video.name
+    video_id = ocr_db.create_video_log(source_name) if enable_ocr else None
     
     for data in process_video_stream(
-        selected_video, skip_frames, enable_blur_detection, 
+        selected_video if not use_camera else None,
+        skip_frames, enable_blur_detection, 
         blur_threshold if enable_blur_detection else 100.0,
         update_interval, enable_enhancement,
         enhancement_strength if enable_enhancement else 1.1,
@@ -724,10 +762,12 @@ if process_button:
         batch_size if (enable_ocr and use_batch_ocr) else 4,
         ocr_confidence_threshold if enable_ocr else 0.7,
         ocr_interval if enable_ocr else 1,
-        save_video, 
+        save_video and not use_camera,  # Don't save camera feed
         output_filename if save_video else "processed_output.mp4",
         ocr_db if enable_ocr else None,
-        video_id if enable_ocr else None
+        video_id if enable_ocr else None,
+        use_camera,
+        camera_index if use_camera else 0
     ):
         if stop_button or not st.session_state.get('processing', False):
             st.warning("Processing stopped by user")
@@ -816,11 +856,6 @@ if process_button:
         st.info("You can download the file from your project directory")
 
 
-def get_image_base64(image_path):
-    """Convert image to base64 for HTML display"""
-    import base64
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
 if 'processing' not in st.session_state:
     st.session_state.processing = False
     st.info("👈 Select a video and click 'Process Video' to start")

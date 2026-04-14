@@ -41,6 +41,7 @@ desktop.ini
 
 # Project specific
 output/
+ocr_logs/
 *.mp4
 !video/*.mp4
 processed_output.mp4
