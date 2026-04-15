@@ -1,6 +1,6 @@
 """
 OCR Database Manager
-Handles persistent storage of OCR results with frame images
+Handles persistent storage of OCR results with frame images and wagon tracking
 """
 
 import json
@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 import cv2
 import re
+from difflib import SequenceMatcher
 
 
 class OCRDatabase:
@@ -51,8 +52,10 @@ class OCRDatabase:
             "frames_with_text": [],
             "text_with_numbers": [],
             "text_only": [],
+            "wagons": [],  # New: Track individual wagons
             "total_frames_processed": 0,
-            "total_text_detected": 0
+            "total_text_detected": 0,
+            "total_wagons": 0
         }
         
         self.index["videos"].append(video_entry)
@@ -65,12 +68,49 @@ class OCRDatabase:
         """Check if text contains numbers"""
         return bool(re.search(r'\d', text))
     
+    def count_digits(self, text):
+        """Count the number of digits in text"""
+        return len(re.findall(r'\d', text))
+    
+    def has_invalid_symbols(self, text):
+        """Check if text contains invalid symbols (., ,, %)"""
+        invalid_symbols = ['.', ',', '%']
+        return any(symbol in text for symbol in invalid_symbols)
+    
+    def is_wagon_number(self, text):
+        """
+        Check if text qualifies as a wagon number:
+        - Must have 5 or more digits
+        - Cannot contain . , % symbols
+        - Can contain / - symbols
+        """
+        digit_count = self.count_digits(text)
+        has_invalid = self.has_invalid_symbols(text)
+        
+        return digit_count >= 5 and not has_invalid
+    
     def filter_text(self, text):
         """Filter text - must be 3+ characters"""
         return len(text.strip()) >= 3
     
+    def text_similarity(self, text1, text2):
+        """Calculate similarity between two texts (0-1)"""
+        return SequenceMatcher(None, text1.lower(), text2.lower()).ratio()
+    
+    def find_matching_wagon(self, video_entry, wagon_number, similarity_threshold=0.85):
+        """
+        Find if a wagon with similar number already exists
+        Returns wagon index if found, None otherwise
+        """
+        for idx, wagon in enumerate(video_entry['wagons']):
+            similarity = self.text_similarity(wagon['wagon_number'], wagon_number)
+            # If similarity is high (allowing 2-3 character difference)
+            if similarity >= similarity_threshold:
+                return idx
+        return None
+    
     def add_ocr_result(self, video_id, frame_number, frame_image, text_results):
-        """Add OCR results for a frame"""
+        """Add OCR results for a frame with wagon tracking"""
         # Find video entry
         video_entry = None
         for video in self.index["videos"]:
@@ -83,6 +123,9 @@ class OCRDatabase:
         
         # Filter and categorize text
         valid_texts = []
+        wagon_numbers = []  # Text with 5+ digits, no invalid symbols (potential wagon IDs)
+        other_texts = []    # Text without enough numbers
+        
         for result in text_results:
             text = result['text'].strip()
             confidence = result['confidence']
@@ -96,8 +139,21 @@ class OCRDatabase:
                 'confidence': confidence
             })
             
-            # Categorize
-            if self.has_numbers(text):
+            # Categorize based on digit count and symbols
+            if self.is_wagon_number(text):  # Must have 5+ digits, no . , % symbols
+                wagon_numbers.append({
+                    'text': text,
+                    'confidence': confidence
+                })
+                
+                if text not in [item['text'] for item in video_entry['text_with_numbers']]:
+                    video_entry['text_with_numbers'].append({
+                        'text': text,
+                        'confidence': confidence,
+                        'first_seen_frame': frame_number
+                    })
+            elif self.has_numbers(text):
+                # Has numbers but doesn't qualify as wagon number
                 if text not in [item['text'] for item in video_entry['text_with_numbers']]:
                     video_entry['text_with_numbers'].append({
                         'text': text,
@@ -105,12 +161,59 @@ class OCRDatabase:
                         'first_seen_frame': frame_number
                     })
             else:
+                other_texts.append({
+                    'text': text,
+                    'confidence': confidence
+                })
+                
                 if text not in [item['text'] for item in video_entry['text_only']]:
                     video_entry['text_only'].append({
                         'text': text,
                         'confidence': confidence,
                         'first_seen_frame': frame_number
                     })
+        
+        # Wagon tracking: Only track if we have valid wagon numbers (5+ digits, no invalid symbols)
+        if wagon_numbers:
+            # Use the first (usually most prominent) wagon number
+            primary_wagon_number = wagon_numbers[0]['text']
+            
+            # Check if this wagon already exists
+            wagon_idx = self.find_matching_wagon(video_entry, primary_wagon_number)
+            
+            if wagon_idx is not None:
+                # Update existing wagon
+                wagon = video_entry['wagons'][wagon_idx]
+                wagon['last_seen_frame'] = frame_number
+                wagon['frame_count'] += 1
+                
+                # Add all detected texts as details
+                for text_item in valid_texts:
+                    if text_item['text'] not in [d['text'] for d in wagon['details']]:
+                        wagon['details'].append(text_item)
+                
+                # Add frame reference
+                wagon['frames'].append({
+                    'frame_number': frame_number,
+                    'texts': valid_texts
+                })
+            else:
+                # Create new wagon
+                new_wagon = {
+                    'wagon_id': len(video_entry['wagons']) + 1,
+                    'wagon_number': primary_wagon_number,
+                    'first_seen_frame': frame_number,
+                    'last_seen_frame': frame_number,
+                    'frame_count': 1,
+                    'details': valid_texts.copy(),  # All detected text for this wagon
+                    'frames': [{
+                        'frame_number': frame_number,
+                        'texts': valid_texts
+                    }],
+                    'confidence': wagon_numbers[0]['confidence']
+                }
+                video_entry['wagons'].append(new_wagon)
+                video_entry['total_wagons'] = len(video_entry['wagons'])
         
         # Save frame image if text was detected
         if valid_texts:
@@ -144,45 +247,87 @@ class OCRDatabase:
         """Get full path to frame image"""
         return self.frames_path / frame_filename
     
+    def truncate_wagon_number(self, wagon_number):
+        """Truncate wagon number if longer than 7 digits, keep only ending"""
+        if len(wagon_number) > 7:
+            return "..." + wagon_number[-7:]
+        return wagon_number
+    
     def export_video_report(self, video_id):
-        """Export detailed report for a video"""
+        """Export wagon-focused report - one section per wagon"""
         video = self.get_video_by_id(video_id)
         if not video:
             return None
         
-        report_path = self.reports_path / f"{video_id}_report.txt"
+        report_path = self.reports_path / f"{video_id}_wagon_report.txt"
         
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write("="*80 + "\n")
-            f.write(f"OCR REPORT: {video['video_name']}\n")
-            f.write(f"Scan Date: {video['timestamp']}\n")
+            f.write(f"🚂 WAGON DETECTION REPORT\n")
+            f.write(f"Video: {video['video_name']}\n")
+            f.write(f"Scan Date: {video['timestamp'][:19]}\n")
             f.write("="*80 + "\n\n")
             
-            f.write(f"Total Frames Processed: {video['total_frames_processed']}\n")
-            f.write(f"Total Text Detected: {video['total_text_detected']}\n")
-            f.write(f"Frames with Text: {len(video['frames_with_text'])}\n\n")
+            f.write(f"📊 SUMMARY: {video.get('total_wagons', 0)} Wagon(s) Detected\n")
+            f.write(f"{'─'*80}\n\n")
             
-            f.write("="*80 + "\n")
-            f.write("TEXT WITH NUMBERS\n")
-            f.write("="*80 + "\n")
-            for item in video['text_with_numbers']:
-                f.write(f"  • {item['text']} (confidence: {item['confidence']:.2f}, frame: {item['first_seen_frame']})\n")
+            # Main content: One section per wagon
+            if video.get('wagons'):
+                for idx, wagon in enumerate(video['wagons'], 1):
+                    truncated_number = self.truncate_wagon_number(wagon['wagon_number'])
+                    
+                    f.write("="*80 + "\n")
+                    f.write(f"WAGON #{idx}\n")
+                    f.write("="*80 + "\n\n")
+                    
+                    f.write(f"Wagon Number: {truncated_number}\n")
+                    if len(wagon['wagon_number']) > 7:
+                        f.write(f"  (Full: {wagon['wagon_number']})\n")
+                    f.write(f"Confidence: {wagon['confidence']:.2%}\n")
+                    f.write(f"Frame Range: {wagon['first_seen_frame']} - {wagon['last_seen_frame']}\n")
+                    f.write(f"Total Frames: {wagon['frame_count']}\n\n")
+                    
+                    f.write("Detected Information:\n")
+                    f.write("─" * 80 + "\n")
+                    
+                    # Group details by type
+                    numbers = [d for d in wagon['details'] if self.has_numbers(d['text'])]
+                    texts = [d for d in wagon['details'] if not self.has_numbers(d['text'])]
+                    
+                    if numbers:
+                        f.write("\n📋 Numbers/IDs:\n")
+                        for detail in numbers:
+                            f.write(f"  • {detail['text']:<50} (confidence: {detail['confidence']:.2%})\n")
+                    
+                    if texts:
+                        f.write("\n📝 Text:\n")
+                        for detail in texts:
+                            f.write(f"  • {detail['text']:<50} (confidence: {detail['confidence']:.2%})\n")
+                    
+                    f.write("\n" + "─" * 80 + "\n")
+                    f.write(f"Frames where this wagon was detected:\n")
+                    frame_numbers = [str(frame['frame_number']) for frame in wagon['frames']]
+                    f.write(f"  {', '.join(frame_numbers)}\n")
+                    f.write("\n\n")
+            else:
+                f.write("="*80 + "\n")
+                f.write("NO WAGONS DETECTED\n")
+                f.write("="*80 + "\n\n")
+                f.write("No valid wagon numbers found in this video.\n\n")
+                f.write("Wagon Detection Criteria:\n")
+                f.write("  • Must contain 5 or more digits\n")
+                f.write("  • Can contain / and - symbols\n")
+                f.write("  • Cannot contain . , % symbols\n\n")
             
+            # Footer with criteria
             f.write("\n" + "="*80 + "\n")
-            f.write("TEXT ONLY (NO NUMBERS)\n")
+            f.write("ℹ️  DETECTION CRITERIA\n")
             f.write("="*80 + "\n")
-            for item in video['text_only']:
-                f.write(f"  • {item['text']} (confidence: {item['confidence']:.2f}, frame: {item['first_seen_frame']})\n")
-            
-            f.write("\n" + "="*80 + "\n")
-            f.write("FRAME-BY-FRAME DETAILS\n")
-            f.write("="*80 + "\n")
-            for frame_data in video['frames_with_text']:
-                f.write(f"\nFrame {frame_data['frame_number']}:\n")
-                f.write(f"  Image: {frame_data['frame_image']}\n")
-                f.write(f"  Detected Text:\n")
-                for text in frame_data['texts']:
-                    f.write(f"    - {text['text']} (confidence: {text['confidence']:.2f})\n")
+            f.write("Valid Wagon Numbers:\n")
+            f.write("  ✓ Contains 5+ digits (e.g., 12345, 123456789)\n")
+            f.write("  ✓ Can include / - symbols (e.g., WGN-12345, ABC/67890)\n")
+            f.write("  ✗ Cannot include . , % symbols\n")
+            f.write("  ℹ️  Numbers >7 digits are truncated in display (last 7 shown)\n")
         
         return report_path
     

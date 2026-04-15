@@ -437,6 +437,10 @@ progress_bar = st.progress(0)
 # OCR Data Display Section
 if enable_ocr:
     st.divider()
+    st.markdown("### 🚂 Detected Wagons")
+    wagons_display_container = st.empty()
+    
+    st.divider()
     st.markdown("### 📊 OCR Text Extraction Results")
     
     col_left, col_right = st.columns(2)
@@ -453,12 +457,6 @@ if enable_ocr:
     st.markdown("### 🖼️ Captured Frames with Text")
     frames_container = st.empty()
 
-
-def get_image_base64(image_path):
-    """Convert image to base64 for HTML display"""
-    import base64
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
 
 @st.cache_resource
 def load_yolo_model(model_path='yolov8n.pt'):
@@ -683,42 +681,74 @@ def enhance_frame(frame, status, strength=1.1):
         return frame, False
 
 def preprocess_for_ocr(frame):
-    """Enhanced preprocessing for better OCR accuracy"""
-    # Convert to grayscale
+    """
+    Enhanced preprocessing for better OCR accuracy with multiple techniques
+    Handles various color combinations and contrast scenarios
+    """
+    results = []
+    
+    # 1. Original grayscale with adaptive threshold
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # Apply bilateral filter to reduce noise while preserving edges
     denoised = cv2.bilateralFilter(gray, 9, 75, 75)
-    
-    # Apply adaptive thresholding for better text contrast
-    thresh = cv2.adaptiveThreshold(
+    thresh1 = cv2.adaptiveThreshold(
         denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
         cv2.THRESH_BINARY, 11, 2
     )
-    
-    # Apply morphological operations to clean up
     kernel = np.ones((2, 2), np.uint8)
-    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    morph1 = cv2.morphologyEx(thresh1, cv2.MORPH_CLOSE, kernel)
+    results.append(cv2.cvtColor(morph1, cv2.COLOR_GRAY2BGR))
     
-    # Convert back to BGR for EasyOCR
-    preprocessed = cv2.cvtColor(morph, cv2.COLOR_GRAY2BGR)
+    # 2. Inverted (negative) - helps with light text on dark background
+    inverted = cv2.bitwise_not(denoised)
+    thresh2 = cv2.adaptiveThreshold(
+        inverted, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 11, 2
+    )
+    morph2 = cv2.morphologyEx(thresh2, cv2.MORPH_CLOSE, kernel)
+    results.append(cv2.cvtColor(morph2, cv2.COLOR_GRAY2BGR))
     
-    return preprocessed
+    # 3. OTSU thresholding - automatic threshold selection
+    _, thresh3 = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    morph3 = cv2.morphologyEx(thresh3, cv2.MORPH_CLOSE, kernel)
+    results.append(cv2.cvtColor(morph3, cv2.COLOR_GRAY2BGR))
+    
+    # 4. Enhanced contrast with CLAHE
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    _, thresh4 = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    results.append(cv2.cvtColor(thresh4, cv2.COLOR_GRAY2BGR))
+    
+    # 5. Color-based preprocessing for colored text (like red/orange on white)
+    # Extract red channel (good for red/orange text)
+    b, g, r = cv2.split(frame)
+    _, red_thresh = cv2.threshold(r, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    results.append(cv2.cvtColor(red_thresh, cv2.COLOR_GRAY2BGR))
+    
+    return results
 
 def perform_ocr(frame, ocr_engine, confidence_threshold=0.7, use_preprocessing=True):
-    """Perform OCR on frame using EasyOCR with enhanced preprocessing"""
+    """Perform OCR on frame using EasyOCR with multiple preprocessing techniques"""
     ocr_frame = frame.copy()
     text_results = []
     
     try:
-        # EasyOCR with preprocessing
+        # EasyOCR with multiple preprocessing techniques
         if use_preprocessing:
-            processed_frame = preprocess_for_ocr(frame)
-            results_original = ocr_engine.readtext(frame)
-            results_processed = ocr_engine.readtext(processed_frame)
+            # Get multiple preprocessed versions
+            preprocessed_frames = preprocess_for_ocr(frame)
             
+            # Run OCR on original
+            results_original = ocr_engine.readtext(frame)
+            
+            # Run OCR on all preprocessed versions
+            all_results = results_original.copy()
+            for processed_frame in preprocessed_frames:
+                results_processed = ocr_engine.readtext(processed_frame)
+                all_results.extend(results_processed)
+            
+            # Combine results, keeping highest confidence for each unique text
             combined_results = {}
-            for bbox, text, confidence in results_original + results_processed:
+            for bbox, text, confidence in all_results:
                 if text not in combined_results or confidence > combined_results[text][1]:
                     combined_results[text] = (bbox, confidence)
             
@@ -1242,6 +1272,26 @@ if process_button:
         if enable_ocr and video_id:
             video_data = ocr_db.get_video_by_id(video_id)
             if video_data:
+                # Display wagons
+                if video_data.get('wagons'):
+                    wagon_html = '<div style="max-height: 500px; overflow-y: auto;">'
+                    for wagon in video_data['wagons']:
+                        wagon_html += f'''
+                        <div class="wagon-card">
+                            <div class="wagon-id">🚂 Wagon #{wagon['wagon_id']}: {wagon['wagon_number']}</div>
+                            <div class="wagon-detail">📊 Frames: {wagon['first_seen_frame']} - {wagon['last_seen_frame']} ({wagon['frame_count']} frames)</div>
+                            <div class="wagon-confidence">✨ Confidence: {wagon['confidence']:.2%}</div>
+                            <div style="margin-top: 10px; padding: 10px; background: #1a1d2e; border-radius: 6px;">
+                                <div style="color: #3b82f6; font-weight: 600; margin-bottom: 5px;">📝 Detected Details:</div>
+                        '''
+                        for detail in wagon['details']:
+                            wagon_html += f'<span style="background: #10b981; color: black; padding: 3px 8px; border-radius: 4px; margin: 3px; display: inline-block; font-size: 0.85em;">{detail["text"]}</span>'
+                        wagon_html += '</div></div>'
+                    wagon_html += '</div>'
+                    wagons_display_container.markdown(wagon_html, unsafe_allow_html=True)
+                else:
+                    wagons_display_container.info("No wagons detected yet. Wagons are identified when text with numbers is found.")
+                
                 # Text with numbers column
                 if video_data['text_with_numbers']:
                     numbers_html = '<div style="max-height: 400px; overflow-y: auto;">'
@@ -1270,19 +1320,16 @@ if process_button:
                 
                 # Display frames with text
                 if video_data['frames_with_text']:
-                    frames_html = '<div style="max-height: 300px; overflow-y: auto;">'
                     for frame_data in reversed(video_data['frames_with_text'][-5:]):  # Show last 5 frames
                         frame_path = ocr_db.get_frame_image_path(frame_data['frame_image'])
                         if frame_path.exists():
-                            frames_html += f'<div style="margin: 10px 0; padding: 10px; background: #1e2130; border-radius: 8px;">'
-                            frames_html += f'<div style="color: #10b981; font-weight: 600; margin-bottom: 5px;">Frame {frame_data["frame_number"]}</div>'
-                            frames_html += f'<img src="data:image/jpeg;base64,{get_image_base64(str(frame_path))}" style="width: 100%; border-radius: 4px; margin: 5px 0;">'
-                            frames_html += '<div style="margin-top: 5px;">'
-                            for text in frame_data['texts']:
-                                frames_html += f'<span style="background: #10b981; color: black; padding: 2px 6px; border-radius: 3px; margin: 2px; display: inline-block; font-size: 0.85em;">{text["text"]}</span>'
-                            frames_html += '</div></div>'
-                    frames_html += '</div>'
-                    frames_container.markdown(frames_html, unsafe_allow_html=True)
+                            with frames_container.container():
+                                st.markdown(f"**Frame {frame_data['frame_number']}**")
+                                st.image(str(frame_path), use_column_width=True)
+                                # Display detected texts
+                                texts_display = " ".join([f"`{text['text']}`" for text in frame_data['texts']])
+                                st.markdown(texts_display)
+                                st.divider()
     
     st.session_state.processing = False
     st.success("✅ Video processing complete!")
